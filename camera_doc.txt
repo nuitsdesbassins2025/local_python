@@ -1,0 +1,52 @@
+Method 1. Snapshot via Logical Channel (Recommended)
+
+Mainstream: 
+
+http://192.168.0.225/cgi-bin/api.cgi?cmd=Snap&channel=1&iLogicChannel=1&snapType=main&rs=test&user=admin&password=lndb2025
+
+Substream: https://192.168.6.219/cgi-bin/api.cgi?cmd=Snap&channel=1&iLogicChannel=1&snapType=sub&rs=(any combination of numbers and letters)&user=admin&password=(user password)
+
+
+
+
+    results = model.track(
+        source=VIDEO_SOURCE,
+        #tracker="bytetrack.yaml",  # par defaut c'est bytetrack
+        persist=True,  # Maintain track IDs across frames
+        #stream=True,  # Process video in real-time, à tester !
+        classes=[0], # detection des humains uniquement
+        show=True,
+    )
+
+Step 2. Enter the URL to get the captured image
+Method 1. Snapshot via Logical Channel (Recommended)
+
+Mainstream: https://192.168.6.219/cgi-bin/api.cgi?cmd=Snap&channel=1&iLogicChannel=1&snapType=main&rs=(any combination of numbers and letters)&user=admin&password=(user password)
+
+Substream: https://192.168.6.219/cgi-bin/api.cgi?cmd=Snap&channel=1&iLogicChannel=1&snapType=sub&rs=(any combination of numbers and letters)&user=admin&password=(user password)
+
+Note: For some earlier models, this URL format may not be supported. You may try the alternative URL provided in Method 2.
+Method 2. Snapshot via Physical Channel (Basic)
+
+    JPEG Image of Mainstream
+
+c
+
+For example, if your IP address is 192.168.2.119, the username is admin and the password is 123456, then the URL should be: 
+
+http://192.168.0.225/cgi-bin/api.cgi?cmd=Snap&channel=0&rs=wuuPhkmUCeI9WG7C&user=admin&password=lndb2025
+
+If you use HTTPS, then the URL should be:
+
+https://192.168.2.119/cgi-bin/api.cgi?cmd=Snap&channel=0&rs=wuuPhkmUCeI9WG7C&user=admin&password=123456
+
+You may refresh the website to get a new snapshot of your live image.
+
+    JPEG Image of Substream
+
+If you want to get the JPEG snap of the substream, please add resolution (width and height) at the end of the URL. The link is as below: 
+http://192.168.2.119/cgi-bin/api.cgi?cmd=Snap&channel=0&rs=wuuPhkmUCeI9WG7C&user=admin&password=123456&width=640&height=480 
+
+Or https://192.168.2.119/cgi-bin/api.cgi?cmd=Snap&channel=0&rs=wuuPhkmUCeI9WG7C&user=admin&password=123456&width=640&height=480
+
+Note: The resolution (width and height) parameter in the request only applies to cameras with the hardware version 51X. For cameras with hardware versions 523/566, the image may not be captured at the exact resolution specified in the URL. Instead, the camera will automatically capture an image with the closest available resolution based on the model's supported stream settings. For example, if the width and height are set to 1024×768 for the RLC-511WA, the actual captured image may be 2560×1920 (mainstream resolution), as this model does not support 1024×768.
