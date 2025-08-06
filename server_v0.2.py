@@ -1,4 +1,4 @@
-import socketio
+import socketio # type: ignore
 import asyncio
 from aiohttp import web
 
@@ -44,6 +44,15 @@ async def on_continuous_data(data):
 async def on_action_triggered_by(data):
     print("✅ Action déclenchée :", data)
     await sio_local.emit("action_triggered_by", data)
+
+
+@sio_local.on("gd_ball_bounce")
+async def ball_bounce(id, data):
+    print("✅ rebond balle :", data)
+    await sio_remote.emit("ball_bounce", data)
+
+
+
 
 @sio_local.event
 async def connect(sid, environ):
