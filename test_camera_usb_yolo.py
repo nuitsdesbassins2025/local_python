@@ -190,9 +190,16 @@ while True:
     # Affiche la frame
     cv2.imshow("Camera USB", frame)
 
+
+    
+
     # Quitter avec la touche 'q'
-    if cv2.waitKey(1) & 0xFF == ord('q'):
+    key = cv2.waitKey(1) & 0xFF
+    if key == ord('q'):
         break
+    else:
+        if key == 32:     # Espace
+            print("Espace pressé !")
 
 # Libère les ressources
 cv2.destroyAllWindows()
