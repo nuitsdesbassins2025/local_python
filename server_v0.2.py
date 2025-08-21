@@ -4,6 +4,7 @@ from aiohttp import web
 
 REMOTE_SERVER_URL = "https://nuit-des-bassins-client-9b7778c21473.herokuapp.com/"
 
+REMOTE_SERVER_URL = "http://localhost:3001/"
 
 sio_remote = socketio.AsyncClient()
 sio_local = socketio.AsyncServer(async_mode="aiohttp", cors_allowed_origins="*")
@@ -16,9 +17,10 @@ shutdown_event = asyncio.Event()
 @sio_remote.event
 async def connect():
     print("✅ Connecté au serveur Node.js")
-    await sio_remote.emit("get_user_data", {"id": "id-admin1234"})
+    await sio_remote.emit("client_request_datas", {"client_id": "id-admin1234"})
     await sio_remote.emit("send_message", {"target": "all", "message": "admin connecté !", "notification": False})
-    await sio_remote.emit("update_pseudo", {"id": "id-joannes", "pseudo": "id-admin1234"})
+
+    # await sio_remote.emit("client_update_datas", {"client_id": "id-admin1234", "pseudo": "leo_admin"})
 
 @sio_remote.event
 async def disconnect():
@@ -45,6 +47,14 @@ async def on_action_triggered_by(data):
     print("✅ Action déclenchée :", data)
     await sio_local.emit("action_triggered_by", data)
 
+@sio_remote.on("admin_game_setting")
+async def on_action_triggered_by(data):
+    print(data)
+    print("✅ changement de scene demandé :", data)
+    await sio_local.emit("admin_game_setting", data)
+
+    
+
 
 @sio_local.on("gd_ball_bounce")
 async def ball_bounce(id, data):
@@ -68,7 +78,10 @@ async def index(request):
 app.router.add_get("/", index)
 
 async def main():
+    runner = None  # Déclarer runner en dehors du bloc try
+
     try:
+        print(f"🔗 Connexion au serveur distant.: {REMOTE_SERVER_URL}")
         await sio_remote.connect(REMOTE_SERVER_URL, transports=["websocket"])
         runner = web.AppRunner(app)
         await runner.setup()
@@ -82,7 +95,8 @@ async def main():
         print("Arrêt du serveur demandé par l'utilisateur")
     finally:
         await sio_remote.disconnect()
-        await runner.cleanup()
+        if runner is not None:  # Vérifier que runner existe avant de le nettoyer
+            await runner.cleanup()
 
 if __name__ == "__main__":
     asyncio.run(main())
