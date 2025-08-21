@@ -52,8 +52,12 @@ async def on_action_triggered_by(data):
     print(data)
     print("✅ changement de scene demandé :", data)
     await sio_local.emit("admin_game_setting", data)
+    #  await sio_local.emit(  "admin_game_setting", {client_id, action, value })
 
-    
+
+# [{ detection_id , player_id , posX , posY}]
+
+# client_in_aperage <= emit depuis le serveur web  : si joueur présent dans la zone d'apérage : associer client_id et detection_id et player_id
 
 
 @sio_local.on("gd_ball_bounce")

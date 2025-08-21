@@ -310,20 +310,30 @@ detect.init_camera()
 detect.init_model()
 detect.load_from_json()
 
+
+# Définir le codec et créer l'objet VideoWriter
+# "XVID" => .avi, "mp4v" => .mp4
+fourcc = cv2.VideoWriter_fourcc(*'XVID')
+path = "/tmp/output_camera.avi"
+out = cv2.VideoWriter(path, fourcc, 20.0, (detect.camera_width, detect.camera_height))
+
+
+
 while True:
     # Capture une frame
     detect.get_camera_frame()
     detect.get_yolo_tracking()
     detect.box_detection_xy()
 
-
-
     # Dessiner les boîtes sur l'image originale
+    out.write(detect.camera_frame)
     frame = detect.show_box_detection(detect.camera_frame)
     frame = detect.show_zone_detection(frame)
 
     # Affiche la frame
     cv2.imshow("Camera USB", frame)
+
+
 
     # Quitter avec la touche 'q'
     key = cv2.waitKey(1) & 0xFF
@@ -334,5 +344,6 @@ while True:
         detect.key_press(key)
 
 # Libère les ressources
+out.release()
 cv2.destroyAllWindows()
 
