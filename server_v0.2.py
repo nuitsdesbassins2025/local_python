@@ -4,7 +4,7 @@ from aiohttp import web
 
 REMOTE_SERVER_URL = "https://nuit-des-bassins-client-9b7778c21473.herokuapp.com/"
 
-REMOTE_SERVER_URL = "http://localhost:3001/"
+# REMOTE_SERVER_URL = "http://localhost:3001/"
 
 sio_remote = socketio.AsyncClient()
 sio_local = socketio.AsyncServer(async_mode="aiohttp", cors_allowed_origins="*")
@@ -18,6 +18,7 @@ shutdown_event = asyncio.Event()
 async def connect():
     print("✅ Connecté au serveur Node.js")
     await sio_remote.emit("client_request_datas", {"client_id": "id-admin1234"})
+
     await sio_remote.emit("send_message", {"target": "all", "message": "admin connecté !", "notification": False})
 
     # await sio_remote.emit("client_update_datas", {"client_id": "id-admin1234", "pseudo": "leo_admin"})
@@ -55,15 +56,39 @@ async def on_action_triggered_by(data):
     #  await sio_local.emit(  "admin_game_setting", {client_id, action, value })
 
 
-# [{ detection_id , player_id , posX , posY}]
 
-# client_in_aperage <= emit depuis le serveur web  : si joueur présent dans la zone d'apérage : associer client_id et detection_id et player_id
+# @sio_remote.on("clients_touch")
+# async def on_action_triggered_by(data):
+#     print(data)
+#     print("📱 ecran touché :", data)
+#     await sio_local.emit("clients_touch", data)
 
 
-@sio_local.on("gd_ball_bounce")
-async def ball_bounce(id, data):
-    print("✅ rebond balle :", data)
-    await sio_remote.emit("ball_bounce", data)
+# @sio_remote.on("clients_touch")
+# async def on_action_triggered_by(data):
+#     print(data)
+#     print("📱 ecran touché :", data)
+#     await sio_local.emit("clients_touch", data)
+
+
+
+
+@sio_remote.on("client_action_trigger")
+async def on_action_triggered(datas):
+    client_id = datas.get("client_id", None)
+    action = datas.get("action", None)
+    action_datas = datas.get("datas", None)
+    print("✅ action reçue du distant :", client_id, action, datas)
+
+    emit_data = {
+        "client_id": client_id,
+        "action": action,
+        "datas": action_datas
+    }
+
+    await sio_local.emit("client_action_trigger", emit_data )
+    print("✅ action reçue du local :", client_id, action, action_datas)
+    
 
 
 
