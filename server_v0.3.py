@@ -80,32 +80,26 @@ async def on_action_triggered(datas):
 
 
 # ENVOI LES EVENEMENTS DE TRACKING
-
+@sio_local.event
 async def on_detection_camera(datas):
     # boucle for de toutes les données
     emit_data = {
-        'tracking_online': False,  # Si le tracking fonctionne ou pas
-        'player_detected': 0,  # Nombre de personnes detectees
-        'player_in_game': 0,  # Nombre de personnes detectes
-        'registered_tracking': [],  # Les données des joueurs suivis qui ont un tracking_id et un client_id
-        'unregistered_tracking': [],  # les personnes qui sont captés mais on pas de client_id
-
+        'tracking_fps': 0.0,  # Si le tracking fonctionne ou pas
+        'tracking_datas': [],  # Les données des joueurs suivis qui ont un tracking_id et un client_id
     }
-    registered_tracking = []
-    unregistered_tracking = []
 
-    data_tracking_ids = datas.get('data_tracking_ids', [])
-    for data_tracking in data_tracking_ids:
-
-    tracking_id = datas.get("tracking_id", None)
-    related_client_id = datas.get("related_client_id", None)
-    posX = 0
-    posY = 0
-    zone = "zone de jeu"
+    tracking_datas_camera = datas.get('tracking_datas', [])
+    for tracking_data in tracking_datas_camera:
+        registered_tracking_item = {
+            'tracking_id': tracking_data.get("tracking_id", ""),
+            'related_client_id': tracking_data.get("related_client_id", ""),
+            'posX': tracking_data.get("posX", ""),
+            'posY': tracking_data.get("posY", ""),
+            'zone': tracking_data.get("zone", ""),
+        }
+        emit_data['tracking_datas'].append(registered_tracking_item)
 
     await sio_local.emit("tracking_datas", emit_data)
-    print("✅ joueurs détéctés/suivits :", player_detected, player_in_game)
-
 
 async def on_tracking_lost(tracking_id, client_id):
     await sio_local.emit("tracking_lost", tracking_id)
