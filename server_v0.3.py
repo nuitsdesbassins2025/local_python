@@ -1,6 +1,8 @@
 import socketio  # type: ignore
 import asyncio
 from aiohttp import web
+from fastapi import FastAPI, Request
+import uvicorn
 
 REMOTE_SERVER_URL = "https://nuit-des-bassins-client-9b7778c21473.herokuapp.com/"
 
@@ -10,6 +12,9 @@ sio_remote = socketio.AsyncClient()
 sio_local = socketio.AsyncServer(async_mode="aiohttp", cors_allowed_origins="*")
 app = web.Application()
 sio_local.attach(app)
+
+# FastAPI
+app_fastapi = FastAPI()
 
 # Utiliser un Event pour contrôler l'arrêt du script
 shutdown_event = asyncio.Event()
@@ -79,27 +84,7 @@ async def on_action_triggered(datas):
     print("✅ action reçue du local :", client_id, action, action_datas)
 
 
-# ENVOI LES EVENEMENTS DE TRACKING
-@sio_local.event
-async def on_detection_camera(datas):
-    # boucle for de toutes les données
-    emit_data = {
-        'tracking_fps': 0.0,  # Si le tracking fonctionne ou pas
-        'tracking_datas': [],  # Les données des joueurs suivis qui ont un tracking_id et un client_id
-    }
 
-    tracking_datas_camera = datas.get('tracking_datas', [])
-    for tracking_data in tracking_datas_camera:
-        registered_tracking_item = {
-            'tracking_id': tracking_data.get("tracking_id", ""),
-            'related_client_id': tracking_data.get("related_client_id", ""),
-            'posX': tracking_data.get("posX", ""),
-            'posY': tracking_data.get("posY", ""),
-            'zone': tracking_data.get("zone", ""),
-        }
-        emit_data['tracking_datas'].append(registered_tracking_item)
-
-    await sio_local.emit("tracking_datas", emit_data)
 
 async def on_tracking_lost(tracking_id, client_id):
     await sio_local.emit("tracking_lost", tracking_id)
@@ -123,6 +108,29 @@ async def index(request):
     return web.Response(text="✅ Serveur local Socket.IO en marche")
 
 
+
+# ----------- FASTAPI REST API ----------------
+@app_fastapi.post("/camera/detection")
+async def camera_detection(request: Request):
+
+    camera_data = await request.json()
+    #print("📡 REST API: données reçues sur /camera/detection", data)
+
+    emit_data = {
+        "tracking_fps": camera_data.get('tracking_fps', 0.0),
+        "tracking_datas": camera_data.get('tracking_datas', []),
+    }
+
+    await sio_local.emit("tracking_datas", emit_data)
+    return {"status": "ok"}
+
+async def start_fastapi():
+    config = uvicorn.Config(app_fastapi, host="0.0.0.0", port=8000, loop="asyncio")
+    server = uvicorn.Server(config)
+    await server.serve()
+
+# ----------- FASTAPI REST API ----------------
+
 app.router.add_get("/", index)
 
 
@@ -137,15 +145,22 @@ async def main():
         site = web.TCPSite(runner, "localhost", 5000)
         print("🚀 Serveur local WebSocket sur http://localhost:5000")
         await site.start()
+        print("🚀 Serveur local FastAPI sur http://localhost:8000, /camera/detection")
+        await start_fastapi()
 
         # Attendre indéfiniment jusqu'à ce que l'événement d'arrêt soit déclenché
         await shutdown_event.wait()
+
+
     except KeyboardInterrupt:
         print("Arrêt du serveur demandé par l'utilisateur")
     finally:
         await sio_remote.disconnect()
         if runner is not None:  # Vérifier que runner existe avant de le nettoyer
             await runner.cleanup()
+
+
+
 
 
 if __name__ == "__main__":

@@ -5,10 +5,10 @@ import urllib.request
 import numpy as np
 import time
 import json
+import httpx
 
 
 red_color = (0, 0, 255)
-
 
 class BoxDetection:
     def __init__(self,x1, y1, x2, y2, label, conf, class_id, track_id):
@@ -21,6 +21,40 @@ class BoxDetection:
         self.class_id = class_id # Yolo classification 0 = personne
         self.track_id = track_id # Yolo tracking 0 = None
         self.zone_xy = []
+
+class TrackingDetection:
+    def __init__(self):
+        self.x = 0
+        self.y = 0
+        self.x1 = 0
+        self.y1 = 0
+        self.x2 = 0
+        self.y2 = 0
+        self.label = 'new'
+        self.class_id = 0 # Yolo classification 0 = personne
+        self.track_id = 0 # Yolo tracking 0 = None
+        self.tracking_id = 0
+        self.related_client_id = ''
+        self.lost_frame = 0
+        self.zone_xy = []
+        self.state = 'new'
+
+    def update_by_boxdetection(self, boxdetection):
+        """ update value """
+        self.x1 = boxdetection.x1
+        self.y1 = boxdetection.y1
+        self.x2 = boxdetection.x2
+        self.y2 = boxdetection.y2
+        self.label = f'{self.tracking_id} -' + boxdetection.label
+        self.class_id = boxdetection.class_id
+        self.track_id = boxdetection.track_id
+        self.lost_frame = 0
+        self.zone_xy = boxdetection.zone_xy
+        # only update zone 0
+        if self.zone_xy:
+            self.x = self.zone_xy[0][0]
+            self.y = self.zone_xy[0][1]
+
 
 class ZoneDetection:
     def __init__(self):
@@ -66,9 +100,12 @@ class CameraDetection:
         self.yolo_conf = 0.5 # seuil de confiance
         self.yolo_filter_class = [] # 0: personne, list of class to track
         self.yolo_model = None
+        self.zone_detection = []
         self.box_detection = []
         self.tracking_detection = []
-        self.zone_detection = []
+        self.tracking_index = 0
+
+        self.sending_url = 'http://localhost:8000/camera/detection'
 
         self.time_start = None
         self.time_mean = []
@@ -76,34 +113,6 @@ class CameraDetection:
 
         self.key_plot = 0
         self.key_action = ''
-
-    def box_detection_xy(self):
-        """ compute xy in zone detection """
-
-        for box_detection in self.box_detection:
-            result = []
-            xp = float((0.5 * (box_detection.x2 - box_detection.x1)) + box_detection.x1)
-            yp = float(box_detection.y2)
-
-            for zone_detection in self.zone_detection:
-                Lx1 = float(zone_detection.pt2[0] - zone_detection.pt1[0])
-                Lx2 = float(zone_detection.pt3[0] - zone_detection.pt4[0])
-                Rx1 = (xp - zone_detection.pt1[0]) / Lx1
-                Rx2 = (xp - zone_detection.pt4[0]) / Lx2
-                Rx = 0.5 * (Rx1 + Rx2)
-
-                Ly1 = zone_detection.pt4[1] - zone_detection.pt1[1]
-                Ly2 = zone_detection.pt3[1] - zone_detection.pt2[1]
-                Ry1 = (yp - zone_detection.pt1[1]) / Ly1
-                Ry2 = (yp - zone_detection.pt2[1]) / Ly2
-                Ry = 0.5 * (Ry1 + Ry2)
-
-                x = (1.0 - Ry) * Rx1 + Ry * Rx2
-                y = (1.0 - Rx) * Ry1 + Rx * Ry2
-
-                result.append((x, y))
-
-            box_detection.zone_xy = result
 
     def save_to_json(self, filepath="config.json"):
         """ Save config to file """
@@ -149,8 +158,9 @@ class CameraDetection:
 
         if len(self.time_mean) > nb_time:
             del(self.time_mean[0])
-            fps = int(1.0 / (sum(time_mean) / len(time_mean)))
-            self.time_fps = f"{fps}"
+            fps = int(1.0 / (sum(self.time_mean) / len(self.time_mean)))
+            self.time_fps = f"{int(fps)}"
+        self.time_start = time_start
 
     def load_zone_detection(self):
         """ load zone detection """
@@ -207,7 +217,7 @@ class CameraDetection:
 
     def get_yolo_tracking(self):
         """ return yolo tracking """
-        self.box_detection = []
+        box_detection = []
         results = self.yolo_model.track(self.camera_frame, conf=self.yolo_conf, persist=True)
         detections = results[0].boxes.xyxy  # Coordonnées [x1, y1, x2, y2]
         classes = results[0].boxes.cls  # Indices des classes détectées
@@ -218,7 +228,7 @@ class CameraDetection:
         for i, box in enumerate(detections):
 
             class_id = int(classes[i])
-            # Filtrer pour ne garder que les personnes
+            # Filtrer pour ne garder que les personnes: yolo_filter_class = [0]
             if self.yolo_filter_class and class_id not in self.yolo_filter_class:
                 continue
 
@@ -233,7 +243,9 @@ class CameraDetection:
             label = f"{track_id} - {class_name} {conf:.2f}"
 
             new_track =  BoxDetection(x1, y1, x2, y2, label, conf, class_id, track_id)
-            self.box_detection.append(new_track)
+            box_detection.append(new_track)
+
+        self.box_detection = box_detection
 
     def get_zone_plot(self):
         """ return list of plot of zone detection """
@@ -258,11 +270,18 @@ class CameraDetection:
         elif i_plot == 3:
             self.zone_detection[i_zone].pt4 = plot
 
-    def show_box_detection(self, frame):
+    def show_tracking(self, frame):
         """ Add yolo box detection on frame """
-        for bd in self.box_detection:
+        label_fps = f'FPS: {self.time_fps}'
+        cv2.putText(frame, label_fps, (10, 10),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+
+        for bd in self.tracking_detection:
+            label = f'{bd.tracking_id} - {bd.state}'
+            if bd.state == 'lost':
+                label += f': {bd.lost_frame}'
             cv2.rectangle(frame, (bd.x1, bd.y1), (bd.x2, bd.y2), (0, 255, 0), 2)
-            cv2.putText(frame, bd.label, (bd.x1, bd.y1 - 10),
+            cv2.putText(frame, label, (bd.x1, bd.y1 - 10),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
 
             xp = int(0.5 * (bd.x2 - bd.x1)) + bd.x1
@@ -305,6 +324,115 @@ class CameraDetection:
                 new_plot = (zone_plots[self.key_plot][0] + x, zone_plots[self.key_plot][1] + y)
                 self.put_zone_plot(self.key_plot, new_plot)
 
+    def get_box_detection_xy(self):
+        """ compute xy in zone detection """
+        box_detections = self.box_detection.copy()
+        result = []
+
+        for box_detection in box_detections:
+            box_result = []
+            xp = float((0.5 * (box_detection.x2 - box_detection.x1)) + box_detection.x1)
+            yp = float(box_detection.y2)
+
+            for zone_detection in self.zone_detection:
+
+                Lx1 = float(zone_detection.pt2[0] - zone_detection.pt1[0])
+                Lx2 = float(zone_detection.pt3[0] - zone_detection.pt4[0])
+                Rx1 = (xp - zone_detection.pt1[0]) / Lx1
+                Rx2 = (xp - zone_detection.pt4[0]) / Lx2
+                Rx = 0.5 * (Rx1 + Rx2)
+
+                Ly1 = zone_detection.pt4[1] - zone_detection.pt1[1]
+                Ly2 = zone_detection.pt3[1] - zone_detection.pt2[1]
+                Ry1 = (yp - zone_detection.pt1[1]) / Ly1
+                Ry2 = (yp - zone_detection.pt2[1]) / Ly2
+                Ry = 0.5 * (Ry1 + Ry2)
+
+                x = (1.0 - Ry) * Rx1 + Ry * Rx2
+                y = (1.0 - Rx) * Ry1 + Rx * Ry2
+                box_result.append((x, y))
+
+            box_detection.zone_xy = box_result
+            result.append(box_detection)
+
+        return result
+
+    def get_new_tracking_index(self):
+        """ return next tracking index """
+        self.tracking_index += 1
+        return int(self.tracking_index)
+
+    def compute_tracking(self):
+        """ compute new tracking with box_detection """
+        box_detections = self.get_box_detection_xy()
+        tracking_detection_old = self.tracking_detection.copy()
+        tracking_detection_index = {}
+
+        old_track_ids = set(x.track_id for x in tracking_detection_old)
+        box_track_ids = set(x.track_id for x in box_detections)
+
+        lost_track_ids = list(old_track_ids - box_track_ids)
+        new_track_ids = list(box_track_ids - old_track_ids)
+
+        update_tracking_detection = []
+
+        # -------- tracking lost
+        detection_index = 0
+        for tracking_detection in tracking_detection_old:
+            if tracking_detection.track_id in lost_track_ids:
+                tracking_detection.lost_frame += 1
+                tracking_detection.state = 'lost'
+                update_tracking_detection.append(tracking_detection)
+            tracking_detection_index[tracking_detection.track_id] = detection_index
+            detection_index += 1
+
+        # --------- tracking update and new
+        for box_detection in box_detections:
+
+            if box_detection.track_id in new_track_ids:
+                tracking_detection = TrackingDetection()
+                tracking_detection.tracking_id = self.get_new_tracking_index()
+                tracking_detection.state = 'new'
+                tracking_detection.update_by_boxdetection(box_detection)
+                update_tracking_detection.append(tracking_detection)
+
+            else:
+                tracking_detection = tracking_detection_old[tracking_detection_index[box_detection.track_id]]
+                tracking_detection.state = 'ok'
+                tracking_detection.lost_frame = 0
+                tracking_detection.update_by_boxdetection(box_detection)
+                update_tracking_detection.append(tracking_detection)
+
+        self.tracking_detection = update_tracking_detection
+
+    def send_tracking_datas(self):
+        """ send tracking data """
+        tracking_fps = self.time_mean and float(1.0 / (sum(self.time_mean) / len(self.time_mean))) or 0.0
+
+        tracking_datas = []
+
+        for tracking_detection in self.tracking_detection:
+            tracking_datas.append({
+                "tracking_id": int(tracking_detection.tracking_id),
+                "related_client_id": tracking_detection.related_client_id,
+                "posX": int(100.0 * tracking_detection.x),
+                "posY": int(100.0 * tracking_detection.y),
+                "state": tracking_detection.state,
+                "lost_frame": tracking_detection.lost_frame,
+                "zone": "game",
+                })
+
+        data = {
+            'tracking_fps': tracking_fps,
+            'tracking_datas': tracking_datas,
+            }
+
+        try:
+            response = httpx.post(self.sending_url, json=data, timeout=1.0)
+        except Exception as e:
+            print("❌ Erreur lors de l'envoi :", e)
+
+
 detect = CameraDetection()
 detect.init_camera()
 detect.init_model()
@@ -312,27 +440,29 @@ detect.load_from_json()
 
 
 # Définir le codec et créer l'objet VideoWriter
-# "XVID" => .avi, "mp4v" => .mp4
-fourcc = cv2.VideoWriter_fourcc(*'XVID')
-path = "/tmp/output_camera.avi"
-out = cv2.VideoWriter(path, fourcc, 20.0, (detect.camera_width, detect.camera_height))
+#fourcc = cv2.VideoWriter_fourcc(*'XVID')
+#path = "/tmp/output_camera.avi"
+#out = cv2.VideoWriter(path, fourcc, 20.0, (detect.camera_width, detect.camera_height))
 
 
 
 while True:
     # Capture une frame
+    detect.track_fps()
     detect.get_camera_frame()
     detect.get_yolo_tracking()
-    detect.box_detection_xy()
+    detect.compute_tracking()
 
     # Dessiner les boîtes sur l'image originale
-    out.write(detect.camera_frame)
-    frame = detect.show_box_detection(detect.camera_frame)
+    #out.write(detect.camera_frame)
+    frame = detect.show_tracking(detect.camera_frame)
     frame = detect.show_zone_detection(frame)
 
     # Affiche la frame
     cv2.imshow("Camera USB", frame)
 
+    # Envoie les données
+    detect.send_tracking_datas()
 
 
     # Quitter avec la touche 'q'
@@ -344,6 +474,6 @@ while True:
         detect.key_press(key)
 
 # Libère les ressources
-out.release()
+#out.release()
 cv2.destroyAllWindows()
 

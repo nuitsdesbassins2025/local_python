@@ -3,4 +3,6 @@ ultralytics
 numpy
 python-socketio
 aiohttp
+fastapi
+uvicorn
 
