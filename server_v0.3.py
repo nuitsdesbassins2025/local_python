@@ -109,6 +109,32 @@ async def index(request):
 
 
 
+
+
+async def emit_tracking_data(sio_local, tracking_datas):
+    """
+    Émet une donnée du tableau tracking_datas chaque seconde en boucle
+    
+    Args:
+        sio_local: L'instance SocketIO
+        tracking_datas: Liste des données à émettre
+    """
+    print("🚀 Démarrage de l'émission des données de tracking...")
+    index = 0
+    while True:
+        if tracking_datas:  # Vérifie que le tableau n'est pas vide
+            # Émet la donnée courante
+            await sio_local.emit("tracking_datas", tracking_datas[index])
+            print(f"📡 Émission des données de tracking : {tracking_datas[index]}")
+            # Passe à la donnée suivante (boucle si fin du tableau)
+            index = (index + 1) % len(tracking_datas)
+        
+        # Attend 1 seconde avant la prochaine émission
+        await asyncio.sleep(1)
+
+
+
+
 # ----------- FASTAPI REST API ----------------
 @app_fastapi.post("/camera/detection")
 async def camera_detection(request: Request):
@@ -145,11 +171,28 @@ async def main():
         site = web.TCPSite(runner, "localhost", 5000)
         print("🚀 Serveur local WebSocket sur http://localhost:5000")
         await site.start()
+        fake_tracking_datas = [
+[{ "tracking_fps": 10.4475923333083, "tracking_datas": [{ "tracking_id": 1.0, "related_client_id": "", "posX": -33.0, "posY": 52.0, "state": "lost", "lost_frame": 161.0, "zone": "game" }, { "tracking_id": 5.0, "related_client_id": "", "posX": -34.0, "posY": 51.0, "state": "lost", "lost_frame": 132.0, "zone": "game" }, { "tracking_id": 4.0, "related_client_id": "", "posX": 68.0, "posY": 75.0, "state": "lost", "lost_frame": 27.0, "zone": "game" }, { "tracking_id": 3.0, "related_client_id": "", "posX": 94.0, "posY": 178.0, "state": "lost", "lost_frame": 17.0, "zone": "game" }, { "tracking_id": 2.0, "related_client_id": "", "posX": 36.0, "posY": 59.0, "state": "ok", "lost_frame": 0.0, "zone": "game" }, { "tracking_id": 6.0, "related_client_id": "", "posX": -32.0, "posY": 53.0, "state": "ok", "lost_frame": 0.0, "zone": "game" }] }]
+,[{ "tracking_fps": 10.0178918905621, "tracking_datas": [{ "tracking_id": 1.0, "related_client_id": "", "posX": -33.0, "posY": 52.0, "state": "lost", "lost_frame": 162.0, "zone": "game" }, { "tracking_id": 5.0, "related_client_id": "", "posX": -34.0, "posY": 51.0, "state": "lost", "lost_frame": 133.0, "zone": "game" }, { "tracking_id": 4.0, "related_client_id": "", "posX": 68.0, "posY": 75.0, "state": "lost", "lost_frame": 28.0, "zone": "game" }, { "tracking_id": 3.0, "related_client_id": "", "posX": 94.0, "posY": 178.0, "state": "lost", "lost_frame": 18.0, "zone": "game" }, { "tracking_id": 6.0, "related_client_id": "", "posX": -32.0, "posY": 53.0, "state": "lost", "lost_frame": 1.0, "zone": "game" }, { "tracking_id": 2.0, "related_client_id": "", "posX": 36.0, "posY": 59.0, "state": "ok", "lost_frame": 0.0, "zone": "game" }] }]
+,[{ "tracking_fps": 9.8833267590646, "tracking_datas": [{ "tracking_id": 1.0, "related_client_id": "", "posX": -33.0, "posY": 52.0, "state": "lost", "lost_frame": 163.0, "zone": "game" }, { "tracking_id": 5.0, "related_client_id": "", "posX": -34.0, "posY": 51.0, "state": "lost", "lost_frame": 134.0, "zone": "game" }, { "tracking_id": 4.0, "related_client_id": "", "posX": 68.0, "posY": 75.0, "state": "lost", "lost_frame": 29.0, "zone": "game" }, { "tracking_id": 3.0, "related_client_id": "", "posX": 94.0, "posY": 178.0, "state": "lost", "lost_frame": 19.0, "zone": "game" }, { "tracking_id": 6.0, "related_client_id": "", "posX": -32.0, "posY": 53.0, "state": "lost", "lost_frame": 2.0, "zone": "game" }, { "tracking_id": 2.0, "related_client_id": "", "posX": 36.0, "posY": 59.0, "state": "ok", "lost_frame": 0.0, "zone": "game" }] }]
+,[{ "tracking_fps": 9.84983032936065, "tracking_datas": [{ "tracking_id": 1.0, "related_client_id": "", "posX": -33.0, "posY": 52.0, "state": "lost", "lost_frame": 164.0, "zone": "game" }, { "tracking_id": 5.0, "related_client_id": "", "posX": -34.0, "posY": 51.0, "state": "lost", "lost_frame": 135.0, "zone": "game" }, { "tracking_id": 4.0, "related_client_id": "", "posX": 68.0, "posY": 75.0, "state": "lost", "lost_frame": 30.0, "zone": "game" }, { "tracking_id": 3.0, "related_client_id": "", "posX": 94.0, "posY": 178.0, "state": "lost", "lost_frame": 20.0, "zone": "game" }, { "tracking_id": 6.0, "related_client_id": "", "posX": -32.0, "posY": 53.0, "state": "lost", "lost_frame": 3.0, "zone": "game" }, { "tracking_id": 2.0, "related_client_id": "", "posX": 36.0, "posY": 59.0, "state": "lost", "lost_frame": 1.0, "zone": "game" }] }]
+,[{ "tracking_fps": 10.0985974464487, "tracking_datas": [{ "tracking_id": 1.0, "related_client_id": "", "posX": -33.0, "posY": 52.0, "state": "lost", "lost_frame": 165.0, "zone": "game" }, { "tracking_id": 5.0, "related_client_id": "", "posX": -34.0, "posY": 51.0, "state": "lost", "lost_frame": 136.0, "zone": "game" }, { "tracking_id": 4.0, "related_client_id": "", "posX": 68.0, "posY": 75.0, "state": "lost", "lost_frame": 31.0, "zone": "game" }, { "tracking_id": 3.0, "related_client_id": "", "posX": 94.0, "posY": 178.0, "state": "lost", "lost_frame": 21.0, "zone": "game" }, { "tracking_id": 6.0, "related_client_id": "", "posX": -32.0, "posY": 53.0, "state": "lost", "lost_frame": 4.0, "zone": "game" }, { "tracking_id": 2.0, "related_client_id": "", "posX": 36.0, "posY": 59.0, "state": "ok", "lost_frame": 0.0, "zone": "game" }] }]
+, [{ "tracking_fps": 9.87406419183205, "tracking_datas": [{ "tracking_id": 1.0, "related_client_id": "", "posX": -33.0, "posY": 52.0, "state": "lost", "lost_frame": 166.0, "zone": "game" }, { "tracking_id": 5.0, "related_client_id": "", "posX": -34.0, "posY": 51.0, "state": "lost", "lost_frame": 137.0, "zone": "game" }, { "tracking_id": 4.0, "related_client_id": "", "posX": 68.0, "posY": 75.0, "state": "lost", "lost_frame": 32.0, "zone": "game" }, { "tracking_id": 3.0, "related_client_id": "", "posX": 94.0, "posY": 178.0, "state": "lost", "lost_frame": 22.0, "zone": "game" }, { "tracking_id": 6.0, "related_client_id": "", "posX": -32.0, "posY": 53.0, "state": "lost", "lost_frame": 5.0, "zone": "game" }, { "tracking_id": 7.0, "related_client_id": "", "posX": 68.0, "posY": 75.0, "state": "new", "lost_frame": 0.0, "zone": "game" }, { "tracking_id": 2.0, "related_client_id": "", "posX": 36.0, "posY": 59.0, "state": "ok", "lost_frame": 0.0, "zone": "game" }] }]
+]
+        # Lance l'émission des données
+        await emit_tracking_data(sio_local, fake_tracking_datas)
+
         print("🚀 Serveur local FastAPI sur http://localhost:8000, /camera/detection")
         await start_fastapi()
 
+
+
         # Attendre indéfiniment jusqu'à ce que l'événement d'arrêt soit déclenché
         await shutdown_event.wait()
+
+
+    
+
 
 
     except KeyboardInterrupt:
@@ -165,3 +208,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
