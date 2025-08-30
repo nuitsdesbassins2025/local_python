@@ -50,3 +50,20 @@ http://192.168.2.119/cgi-bin/api.cgi?cmd=Snap&channel=0&rs=wuuPhkmUCeI9WG7C&user
 Or https://192.168.2.119/cgi-bin/api.cgi?cmd=Snap&channel=0&rs=wuuPhkmUCeI9WG7C&user=admin&password=123456&width=640&height=480
 
 Note: The resolution (width and height) parameter in the request only applies to cameras with the hardware version 51X. For cameras with hardware versions 523/566, the image may not be captured at the exact resolution specified in the URL. Instead, the camera will automatically capture an image with the closest available resolution based on the model's supported stream settings. For example, if the width and height are set to 1024×768 for the RLC-511WA, the actual captured image may be 2560×1920 (mainstream resolution), as this model does not support 1024×768.
+
+
+tracker yolo
+
+Paramètre 	Valeurs ou plages valides 	Description
+tracker_type 	botsort, bytetrack 	Spécifie le type de tracker. Les options sont botsort ou bytetrack.
+track_high_thresh 	0.0-1.0 	Seuil pour la première association lors du suivi utilisé. Affecte la confiance avec laquelle une détection est mise en correspondance avec une piste existante.
+track_low_thresh 	0.0-1.0 	Seuil pour la deuxième association lors du suivi. Utilisé lorsque la première association échoue, avec des critères plus permissifs.
+new_track_thresh 	0.0-1.0 	Seuil pour initialiser une nouvelle piste si la détection ne correspond à aucune piste existante. Contrôle le moment où un nouvel objet est considéré comme apparaissant.
+track_buffer 	>=0 	Tampon utilisé pour indiquer le nombre d'images pendant lesquelles les pistes perdues doivent être maintenues en vie avant d'être supprimées. Une valeur plus élevée signifie une plus grande tolérance à l'occlusion.
+match_thresh 	0.0-1.0 	Seuil de correspondance des pistes. Des valeurs plus élevées rendent la correspondance plus permissive.
+fuse_score 	True, False 	Détermine s'il faut fusionner les scores de confiance avec les distances IoU avant la mise en correspondance. Aide à équilibrer les informations spatiales et de confiance lors de l'association.
+gmc_method 	orb, sift, ecc, sparseOptFlow, None 	Méthode utilisée pour la compensation globale de mouvement. Aide à tenir compte du mouvement de la caméra pour améliorer le suivi.
+proximity_thresh 	0.0-1.0 	IoU minimum requis pour une correspondance valide avec ReID (ré-identification). Assure une proximité spatiale avant d'utiliser les indices d'apparence.
+appearance_thresh 	0.0-1.0 	Similarité d'apparence minimale requise pour ReID. Définit le degré de similarité visuelle que deux détections doivent avoir pour être liées.
+with_reid 	True, False 	Indique s'il faut utiliser ReID. Active la correspondance basée sur l'apparence pour un meilleur suivi à travers les occlusions. Uniquement pris en charge par BoTSORT.
+model 	auto, yolo11[nsmlx]-cls.pt 	Spécifie le modèle à utiliser. La valeur par défaut est auto, qui utilise les fonctionnalités natives si le détecteur est YOLO, sinon utilise yolo11n-cls.pt.
