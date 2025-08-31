@@ -5,3 +5,4 @@
 .~lock.*
 venv
 fastapi_env
+media
