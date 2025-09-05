@@ -94,6 +94,24 @@ async def on_action_triggered(datas):
     print("✅ action reçue du local :", client_id, action, action_datas)
 
 
+@sio_local.on("godot_event")
+async def on_godot_event(signal_id, datas):
+    #print("✅ evènement reçue de godot :", datas)
+    event_type = datas.get("event_type", None)
+    #action = datas.get("action", None)
+    event_datas = datas.get("event_datas", None)
+
+    print("✅ Godot event_type :", event_type, ", event_datas : ", event_datas)
+
+    emit_data = {
+        "event_type": event_type,
+        "event_datas": event_datas
+    }
+
+    await sio_remote.emit("godot_event_transfer", emit_data)
+    await sio_local.emit("godot_event_transfer", emit_data)
+    #print("✅ action reçue du local :", event_type, action, event_datas)
+
 
 
 async def on_tracking_lost(tracking_id, client_id):
