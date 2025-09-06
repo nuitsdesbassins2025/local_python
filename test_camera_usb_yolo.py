@@ -20,7 +20,7 @@ class BoxDetection:
         self.conf = conf
         self.class_id = class_id # Yolo classification 0 = personne
         self.track_id = track_id # Yolo tracking 0 = None
-        self.zone_xy = []
+
 
 class TrackingDetection:
     def __init__(self):
@@ -38,6 +38,7 @@ class TrackingDetection:
         self.lost_frame = 0
         self.zone_xy = []
         self.state = 'new'
+        self.tracker = None
 
     def update_by_boxdetection(self, boxdetection):
         """ update value """
@@ -49,17 +50,41 @@ class TrackingDetection:
         self.class_id = boxdetection.class_id
         self.track_id = boxdetection.track_id
         self.lost_frame = 0
-        self.zone_xy = boxdetection.zone_xy
-        # only update zone 0
-        if self.zone_xy:
-            self.x = self.zone_xy[0][0]
-            self.y = self.zone_xy[0][1]
+        self.tracker = None
+
+    def update_by_opencvtracking(self, frame, previews_frame):
+        """ Complete lost tracking by opencv tracker """
+        bbox = (self.x1, self.y1, self.x2 - self.x1, self.y2 - self.y1)
+        if self.tracker is None:
+            self.tracker = cv2.legacy.TrackerCSRT_create()
+
+        self.tracker.init(previews_frame, bbox)
+        success, bbox = self.tracker.update(frame)
+        if success:
+            (x1, y1, w, h) = [int(v) for v in bbox]
+            self.x1 = x1
+            self.y1 = y1
+            self.x2 = x1 + w
+            self.y2 = y1 + h
+
+    def intersection_boxdetection(self, boxdetection):
+        """ return % of surface with boxdetection"""
+        surface = (self.x2 - self.x1) * (self.y2 - self.y1)
+        if surface != 0.0:
+
+            inter_w = max(0, min(self.x2, boxdetection.x2) - max(self.x1, boxdetection.x1))
+            inter_h = max(0, min(self.y2, boxdetection.y2) - max(self.y1, boxdetection.y1))
+            res = inter_w * inter_h / surface
+        else:
+            res = 0.0
+
+        return int(100 * res)
 
 
 class ZoneDetection:
     def __init__(self):
         """ playing zone """
-        # Définir les 4 points du trapèze (x, y)
+        # Définir les 4 points du trapèze zone de jeux (x, y)
         self.pt1 = (200, 100)  # Haut-gauche
         self.pt2 = (600, 100)  # Haut-droit
         self.pt3 = (700, 400)  # Bas-droit
@@ -81,6 +106,7 @@ class CameraDetection:
         self.camera_width = 1280
         self.camera_height = 800
         self.camera_frame = None
+        self.camera_frame_previews = None
         # resolution: 1280 800 FPS: 11
         # resolution: 640 480: FPS: 33
         # resolution: 320 240 FPS: 200
@@ -96,13 +122,15 @@ class CameraDetection:
         # cap.set(cv2.CAP_PROP_BACKLIGHT, 1)      # Compensation du rétroéclairage
         # cap.set(cv2.CAP_PROP_EXPOSURE, -4)      # Exposition (souvent négatif = automatique désactivé)
 
-        self.yolo_model_name = "yolo11m.pt"
-        self.yolo_conf = 0.5 # seuil de confiance
+        self.yolo_model_name = "yolo11m-pose.pt"
+        self.yolo_conf = 0.4 # seuil de confiance
         self.yolo_filter_class = [] # 0: personne, list of class to track
         self.yolo_model = None
+        self.tracker = cv2.legacy.TrackerCSRT_create()
         self.zone_detection = []
         self.box_detection = []
         self.tracking_detection = []
+        self.tracking_seuil = 0.5 # surface minimum to link a lost box detection
         self.tracking_index = 0
 
         self.sending_url = 'http://localhost:8000/camera/detection'
@@ -198,6 +226,16 @@ class CameraDetection:
         self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, self.camera_width)
         self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, self.camera_height)
 
+    def init_video(self, video_path=None):
+        """ Ouvre un fichier vidéo """
+        try:
+            self.camera = cv2.VideoCapture(video_path)
+            # Vérifier si l'ouverture a réussi
+            if not self.camera.isOpened():
+                raise ValueError("Impossible d'ouvrir la source vidéo")
+        except:
+            pass
+
     def end_camera(self):
         """ resource free """
         self.camera.release()
@@ -210,6 +248,8 @@ class CameraDetection:
         """ Return the frame of the camera """
         ret, frame = self.camera.read()
         if ret:
+            if self.camera_frame is not None:
+                self.camera_frame_previews = self.camera_frame
             self.camera_frame = frame
         else:
             # error
@@ -218,7 +258,10 @@ class CameraDetection:
     def get_yolo_tracking(self):
         """ return yolo tracking """
         box_detection = []
-        results = self.yolo_model.track(self.camera_frame, conf=self.yolo_conf, persist=True)
+        results = self.yolo_model.track(self.camera_frame,
+                                        tracker="custom_tracker.yaml",
+                                        conf=self.yolo_conf,
+                                        persist=True)
         detections = results[0].boxes.xyxy  # Coordonnées [x1, y1, x2, y2]
         classes = results[0].boxes.cls  # Indices des classes détectées
         confs = results[0].boxes.conf  # Niveaux de confiance
@@ -277,7 +320,7 @@ class CameraDetection:
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
 
         for bd in self.tracking_detection:
-            label = f'{bd.tracking_id} - {bd.state}'
+            label = f'{bd.tracking_id} - {bd.track_id} - {bd.state}'
             if bd.state == 'lost':
                 label += f': {bd.lost_frame}'
             cv2.rectangle(frame, (bd.x1, bd.y1), (bd.x2, bd.y2), (0, 255, 0), 2)
@@ -357,6 +400,35 @@ class CameraDetection:
 
         return result
 
+    def update_xy_tracking(self):
+        """ update the x and y value of box tracking """
+        for box_tracking in self.tracking_detection:
+            box_result = []
+            xp = float((0.5 * (box_tracking.x2 - box_tracking.x1)) + box_tracking.x1)
+            yp = float(box_tracking.y2)
+
+            for zone_detection in self.zone_detection:
+                Lx1 = float(zone_detection.pt2[0] - zone_detection.pt1[0])
+                Lx2 = float(zone_detection.pt3[0] - zone_detection.pt4[0])
+                Rx1 = (xp - zone_detection.pt1[0]) / Lx1
+                Rx2 = (xp - zone_detection.pt4[0]) / Lx2
+                Rx = 0.5 * (Rx1 + Rx2)
+
+                Ly1 = zone_detection.pt4[1] - zone_detection.pt1[1]
+                Ly2 = zone_detection.pt3[1] - zone_detection.pt2[1]
+                Ry1 = (yp - zone_detection.pt1[1]) / Ly1
+                Ry2 = (yp - zone_detection.pt2[1]) / Ly2
+                Ry = 0.5 * (Ry1 + Ry2)
+
+                x = (1.0 - Ry) * Rx1 + Ry * Rx2
+                y = (1.0 - Rx) * Ry1 + Rx * Ry2
+                box_result.append((x, y))
+
+            box_tracking.zone_xy = box_result
+            if box_tracking.zone_xy:
+                box_tracking.x = box_tracking.zone_xy[0][0]
+                box_tracking.y = box_tracking.zone_xy[0][1]
+
     def get_new_tracking_index(self):
         """ return next tracking index """
         self.tracking_index += 1
@@ -364,7 +436,7 @@ class CameraDetection:
 
     def compute_tracking(self):
         """ compute new tracking with box_detection """
-        box_detections = self.get_box_detection_xy()
+        box_detections = self.box_detection.copy() #self.get_box_detection_xy()
         tracking_detection_old = self.tracking_detection.copy()
         tracking_detection_index = {}
 
@@ -382,28 +454,56 @@ class CameraDetection:
             if tracking_detection.track_id in lost_track_ids:
                 tracking_detection.lost_frame += 1
                 tracking_detection.state = 'lost'
+                tracking_detection.update_by_opencvtracking(self.camera_frame, self.camera_frame_previews)
                 update_tracking_detection.append(tracking_detection)
+
             tracking_detection_index[tracking_detection.track_id] = detection_index
             detection_index += 1
 
-        # --------- tracking update and new
+        # --------- tracking update
         for box_detection in box_detections:
-
-            if box_detection.track_id in new_track_ids:
-                tracking_detection = TrackingDetection()
-                tracking_detection.tracking_id = self.get_new_tracking_index()
-                tracking_detection.state = 'new'
-                tracking_detection.update_by_boxdetection(box_detection)
-                update_tracking_detection.append(tracking_detection)
-
-            else:
+            if box_detection.track_id not in new_track_ids:
                 tracking_detection = tracking_detection_old[tracking_detection_index[box_detection.track_id]]
                 tracking_detection.state = 'ok'
                 tracking_detection.lost_frame = 0
                 tracking_detection.update_by_boxdetection(box_detection)
                 update_tracking_detection.append(tracking_detection)
 
+        # --------- tracking new
+        for box_detection in box_detections:
+            # Check if some lost tracking_detection is corresponding
+            if box_detection.track_id in new_track_ids:
+                score_proximity = {}
+                if len(lost_track_ids) > 0:
+                    for tracking_detection in tracking_detection_old:
+                        if tracking_detection.track_id in lost_track_ids:
+                            score = tracking_detection.intersection_boxdetection(box_detection)
+                            score_proximity[score] = tracking_detection.tracking_id
+
+                    score_max =  max(list(score_proximity.keys()))
+                    if score_max >= self.tracking_seuil:
+                        for tracking_detection in update_tracking_detection:
+                            if tracking_detection.tracking_id == score_proximity[score_max]:
+                                lost_track_ids.remove(tracking_detection.track_id)
+                                tracking_detection.update_by_boxdetection(box_detection)
+                                break
+                    else:
+                        tracking_detection = TrackingDetection()
+                        tracking_detection.tracking_id = self.get_new_tracking_index()
+                        tracking_detection.state = 'new'
+                        tracking_detection.update_by_boxdetection(box_detection)
+                else:
+                    tracking_detection = TrackingDetection()
+                    tracking_detection.tracking_id = self.get_new_tracking_index()
+                    tracking_detection.state = 'new'
+
+                    tracking_detection.update_by_boxdetection(box_detection)
+                update_tracking_detection.append(tracking_detection)
+
+
         self.tracking_detection = update_tracking_detection
+        self.update_xy_tracking()
+
 
     def send_tracking_datas(self):
         """ send tracking data """
@@ -434,7 +534,8 @@ class CameraDetection:
 
 
 detect = CameraDetection()
-detect.init_camera()
+#detect.init_camera()
+detect.init_video('/home/joannes/Vidéos/nuitsdesbassins/output_camera_03.avi')
 detect.init_model()
 detect.load_from_json()
 
@@ -472,6 +573,10 @@ while True:
         break
     elif key:
         detect.key_press(key)
+
+    # wait a
+    while key != ord('a'):
+        key = cv2.waitKey(1) & 0xFF
 
 # Libère les ressources
 #out.release()
