@@ -6,9 +6,11 @@ import numpy as np
 import time
 import json
 import httpx
-
+import multiprocessing
 
 red_color = (0, 0, 255)
+green_color = (0, 255, 0)
+blue_color = (255, 0, 0)
 
 class BoxDetection:
     def __init__(self,x1, y1, x2, y2, label, conf, class_id, track_id):
@@ -26,10 +28,18 @@ class TrackingDetection:
     def __init__(self):
         self.x = 0
         self.y = 0
+        self.last_position = []
         self.x1 = 0
         self.y1 = 0
         self.x2 = 0
         self.y2 = 0
+        self.mean_w = []
+        self.mean_y = []
+        self.x1_ok = 0
+        self.y1_ok = 0
+        self.x2_ok = 0
+        self.y2_ok = 0
+        self.show_last_position = []
         self.label = 'new'
         self.class_id = 0 # Yolo classification 0 = personne
         self.track_id = 0 # Yolo tracking 0 = None
@@ -46,11 +56,19 @@ class TrackingDetection:
         self.y1 = boxdetection.y1
         self.x2 = boxdetection.x2
         self.y2 = boxdetection.y2
+        self.x1_ok = boxdetection.x1
+        self.y1_ok = boxdetection.y1
+        self.x2_ok = boxdetection.x2
+        self.y2_ok = boxdetection.y2
         self.label = f'{self.tracking_id} -' + boxdetection.label
         self.class_id = boxdetection.class_id
         self.track_id = boxdetection.track_id
         self.lost_frame = 0
         self.tracker = None
+
+    def get_bbox(self):
+        """ return bbox """
+        return (self.x1, self.y1, self.x2 - self.x1, self.y2 - self.y1)
 
     def update_by_opencvtracking(self, frame, previews_frame):
         """ Complete lost tracking by opencv tracker """
@@ -66,6 +84,20 @@ class TrackingDetection:
             self.y1 = y1
             self.x2 = x1 + w
             self.y2 = y1 + h
+
+    def tread_opencvtracking(self, frame, previews_frame, queue):
+        """ Complete lost tracking by opencv tracker """
+        res = (self.x1, self.y1, self.x2, self.y2)
+        bbox = (self.x1, self.y1, self.x2 - self.x1, self.y2 - self.y1)
+        if self.tracker is None:
+            self.tracker = cv2.legacy.TrackerCSRT_create()
+
+        self.tracker.init(previews_frame, bbox)
+        success, bbox = self.tracker.update(frame)
+        if success:
+            (x1, y1, w, h) = [int(v) for v in bbox]
+            res = (x1, y1, x1 + w, y1 + h)
+        queue.put(res)
 
     def intersection_boxdetection(self, boxdetection):
         """ return % of surface with boxdetection"""
@@ -122,16 +154,18 @@ class CameraDetection:
         # cap.set(cv2.CAP_PROP_BACKLIGHT, 1)      # Compensation du rétroéclairage
         # cap.set(cv2.CAP_PROP_EXPOSURE, -4)      # Exposition (souvent négatif = automatique désactivé)
 
-        self.yolo_model_name = "yolo11m-pose.pt"
+        self.yolo_model_name = "yolo12m.pt"
         self.yolo_conf = 0.4 # seuil de confiance
-        self.yolo_filter_class = [] # 0: personne, list of class to track
+        self.yolo_filter_class = [0] # 0: personne, list of class to track
         self.yolo_model = None
         self.tracker = cv2.legacy.TrackerCSRT_create()
         self.zone_detection = []
         self.box_detection = []
         self.tracking_detection = []
-        self.tracking_seuil = 0.5 # surface minimum to link a lost box detection
+        self.tracking_seuil = 0.3 # surface minimum to link a lost box detection
+        self.lost_frame_max = 25
         self.tracking_index = 0
+        self.last_position_max = 5
 
         self.sending_url = 'http://localhost:8000/camera/detection'
 
@@ -250,6 +284,9 @@ class CameraDetection:
         if ret:
             if self.camera_frame is not None:
                 self.camera_frame_previews = self.camera_frame
+            else:
+                self.camera_frame_previews = frame
+
             self.camera_frame = frame
         else:
             # error
@@ -258,35 +295,41 @@ class CameraDetection:
     def get_yolo_tracking(self):
         """ return yolo tracking """
         box_detection = []
-        results = self.yolo_model.track(self.camera_frame,
-                                        tracker="custom_tracker.yaml",
-                                        conf=self.yolo_conf,
-                                        persist=True)
-        detections = results[0].boxes.xyxy  # Coordonnées [x1, y1, x2, y2]
-        classes = results[0].boxes.cls  # Indices des classes détectées
-        confs = results[0].boxes.conf  # Niveaux de confiance
-        track_ids = results[0].boxes.id
+        frame = self.camera_frame
 
-        # sauvegarder les boîtes detectées
-        for i, box in enumerate(detections):
+        if frame is not None:
 
-            class_id = int(classes[i])
-            # Filtrer pour ne garder que les personnes: yolo_filter_class = [0]
-            if self.yolo_filter_class and class_id not in self.yolo_filter_class:
-                continue
+            results = self.yolo_model.track(frame,
+                                            tracker="custom_tracker.yaml",
+                                            classes=self.yolo_filter_class,
+                                            conf=self.yolo_conf,
+                                            #imgsz=1280,
+                                            persist=True)
+            detections = results[0].boxes.xyxy  # Coordonnées [x1, y1, x2, y2]
+            classes = results[0].boxes.cls  # Indices des classes détectées
+            confs = results[0].boxes.conf  # Niveaux de confiance
+            track_ids = results[0].boxes.id
 
-            x1, y1, x2, y2 = map(int, box)  # Conversion en int
-            conf = float(confs[i])
-            if track_ids is not None:
-                track_id = int(track_ids[i])
-            else:
-                track_id = 0
+            # sauvegarder les boîtes detectées
+            for i, box in enumerate(detections):
 
-            class_name = self.yolo_model.names[class_id]
-            label = f"{track_id} - {class_name} {conf:.2f}"
+                class_id = int(classes[i])
+                # Filtrer pour ne garder que les personnes: yolo_filter_class = [0]
+                if self.yolo_filter_class and class_id not in self.yolo_filter_class:
+                    continue
 
-            new_track =  BoxDetection(x1, y1, x2, y2, label, conf, class_id, track_id)
-            box_detection.append(new_track)
+                x1, y1, x2, y2 = map(int, box)  # Conversion en int
+                conf = float(confs[i])
+                if track_ids is not None:
+                    track_id = int(track_ids[i])
+                else:
+                    track_id = 0
+
+                class_name = self.yolo_model.names[class_id]
+                label = f"{track_id} - {class_name} {conf:.2f}"
+
+                new_track =  BoxDetection(x1, y1, x2, y2, label, conf, class_id, track_id)
+                box_detection.append(new_track)
 
         self.box_detection = box_detection
 
@@ -321,15 +364,24 @@ class CameraDetection:
 
         for bd in self.tracking_detection:
             label = f'{bd.tracking_id} - {bd.track_id} - {bd.state}'
+            color = green_color
             if bd.state == 'lost':
                 label += f': {bd.lost_frame}'
-            cv2.rectangle(frame, (bd.x1, bd.y1), (bd.x2, bd.y2), (0, 255, 0), 2)
+                color = blue_color
+            cv2.rectangle(frame, (bd.x1, bd.y1), (bd.x2, bd.y2), color, 2)
             cv2.putText(frame, label, (bd.x1, bd.y1 - 10),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
 
             xp = int(0.5 * (bd.x2 - bd.x1)) + bd.x1
             yp = bd.y2
             cv2.circle(frame, (xp, yp), 10, red_color, 2)
+
+            for position in bd.show_last_position:
+                cv2.circle(frame, position, 3, red_color, 2)
+
+            bd.show_last_position.append((xp, yp))
+            if len(bd.show_last_position) > self.last_position_max:
+                del(bd.show_last_position[0])
 
             if bd.zone_xy:
                 rx = int(bd.zone_xy[0][0] * 100.0)
@@ -429,6 +481,11 @@ class CameraDetection:
                 box_tracking.x = box_tracking.zone_xy[0][0]
                 box_tracking.y = box_tracking.zone_xy[0][1]
 
+            box_tracking.last_position.append((box_tracking.x, box_tracking.y))
+            if len(box_tracking.last_position) > self.last_position_max:
+                del(box_tracking.last_position[0])
+
+
     def get_new_tracking_index(self):
         """ return next tracking index """
         self.tracking_index += 1
@@ -454,7 +511,7 @@ class CameraDetection:
             if tracking_detection.track_id in lost_track_ids:
                 tracking_detection.lost_frame += 1
                 tracking_detection.state = 'lost'
-                tracking_detection.update_by_opencvtracking(self.camera_frame, self.camera_frame_previews)
+                #tracking_detection.update_by_opencvtracking(self.camera_frame, self.camera_frame_previews)
                 update_tracking_detection.append(tracking_detection)
 
             tracking_detection_index[tracking_detection.track_id] = detection_index
@@ -496,13 +553,52 @@ class CameraDetection:
                     tracking_detection = TrackingDetection()
                     tracking_detection.tracking_id = self.get_new_tracking_index()
                     tracking_detection.state = 'new'
-
                     tracking_detection.update_by_boxdetection(box_detection)
+
                 update_tracking_detection.append(tracking_detection)
 
+        # -------- tracking lost + opencv tracker
+        multi_tracking = []
+        multi_response = []
+        multi_index = 0
+        for tracking_detection in tracking_detection_old:
+            if tracking_detection.state == 'lost':
+                queue = multiprocessing.Queue()
+                process = multiprocessing.Process(target=tracking_detection.tread_opencvtracking,
+                                        args=(self.camera_frame, self.camera_frame_previews, queue),
+                                        name=f'{tracking_detection.tracking_id}')
+                multi_response.append(queue)
+                multi_tracking.append(process)
+                multi_index += 1
+                #tracking_detection.update_by_opencvtracking(self.camera_frame, self.camera_frame_previews)
 
-        self.tracking_detection = update_tracking_detection
+        for tracking in multi_tracking:
+            tracking.start()
+        time.sleep(0.01)
+        for tracking in multi_tracking:
+            tracking.join()
+
+        multi_index = 0
+        for tracking_detection in tracking_detection_old:
+            if tracking_detection.state == 'lost':
+
+                (x1, y1, x2, y2) = multi_response[multi_index].get()
+                tracking_detection.x1 = x1
+                tracking_detection.y1 = y1
+                tracking_detection.x2 = x2
+                tracking_detection.y2 = y2
+                multi_index += 1
+
+
+
+        finale_tracking_detection = []
+        for tracking_detection in update_tracking_detection:
+            if tracking_detection.lost_frame < self.lost_frame_max:
+                finale_tracking_detection.append(tracking_detection)
+
+        self.tracking_detection = finale_tracking_detection
         self.update_xy_tracking()
+
 
 
     def send_tracking_datas(self):
@@ -548,14 +644,23 @@ detect.load_from_json()
 
 
 while True:
+    start_time = time.time()
     # Capture une frame
     detect.track_fps()
     detect.get_camera_frame()
-    detect.get_yolo_tracking()
-    detect.compute_tracking()
+    camera_time = time.time()
+    print('------camera_time------', camera_time - start_time)
 
-    # Dessiner les boîtes sur l'image originale
+    detect.get_yolo_tracking()
+    yolo_time = time.time()
+    print('------yolo_time------', yolo_time - camera_time)
+
+    detect.compute_tracking()
+    detect_time = time.time()
+    print('------detect_time------', detect_time - yolo_time)
+
     #out.write(detect.camera_frame)
+    # Dessiner les boîtes sur l'image originale
     frame = detect.show_tracking(detect.camera_frame)
     frame = detect.show_zone_detection(frame)
 
@@ -566,6 +671,8 @@ while True:
     detect.send_tracking_datas()
 
 
+    #out.write(detect.camera_frame)
+
     # Quitter avec la touche 'q'
     key = cv2.waitKey(1) & 0xFF
     if key == ord('q'):
@@ -575,7 +682,8 @@ while True:
         detect.key_press(key)
 
     # wait a
-    while key != ord('a'):
+
+    while True and key != ord('a'):
         key = cv2.waitKey(1) & 0xFF
 
 # Libère les ressources
