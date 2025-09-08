@@ -7,7 +7,7 @@ track_high_thresh: 0.25  # score minimal pour associer une détection existante
 track_low_thresh: 0.15
 new_track_thresh: 0.6
 match_thresh: 0.9
-track_buffer: 10
+track_buffer: 15
 frame_rate: 20
 fuse_score: False
 

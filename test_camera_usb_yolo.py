@@ -39,6 +39,7 @@ class TrackingDetection:
         self.y1_ok = 0
         self.x2_ok = 0
         self.y2_ok = 0
+        self.occluded_by_box = []
         self.show_last_position = []
         self.label = 'new'
         self.class_id = 0 # Yolo classification 0 = personne
@@ -66,6 +67,19 @@ class TrackingDetection:
         self.lost_frame = 0
         self.tracker = None
 
+    def intersection_aera(self, trackingbox):
+        """ return intersection aera """
+        xA = max(self.x1, trackingbox.x1)
+        yA = max(self.y1, trackingbox.y1)
+        xB = min(self.x2, trackingbox.x2)
+        yB = min(self.y2, trackingbox.y2)
+
+        if xB <= xA or yB <= yA:
+            return 0.0  # pas d'intersection
+
+        return (xB - xA) * (yB - yA)
+
+
     def get_bbox(self):
         """ return bbox """
         return (self.x1, self.y1, self.x2 - self.x1, self.y2 - self.y1)
@@ -85,18 +99,33 @@ class TrackingDetection:
             self.x2 = x1 + w
             self.y2 = y1 + h
 
+    def get_visible_y2(self):
+        """ return bbox visible from x1,y1 """
+        box = (self.x1, self.y1, self.x2, self.y2)
+        for xybox in self.occluded_by_box:
+            if xybox[1] > box[3]:
+                box[3] = xybox[1]
+        if box[1] > box[3]:
+            box[3] = box[1]
+        bbox = (box[0], box[1], box[2] - box[0], box[3] - box[1])
+        return bbox
+
     def tread_opencvtracking(self, frame, previews_frame, queue):
         """ Complete lost tracking by opencv tracker """
         res = (self.x1, self.y1, self.x2, self.y2)
-        bbox = (self.x1, self.y1, self.x2 - self.x1, self.y2 - self.y1)
-        if self.tracker is None:
-            self.tracker = cv2.legacy.TrackerCSRT_create()
+        w_origin = self.x2 - self.x1
+        h_origin = self.y2 - self.y1
+        bbox = self.get_visible_y2()
+        # Check 20% of visibility
+        if bbox[3] > 0.2 * (self.y2 - self.y1):
+            if self.tracker is None:
+                self.tracker = cv2.legacy.TrackerCSRT_create()
 
-        self.tracker.init(previews_frame, bbox)
-        success, bbox = self.tracker.update(frame)
-        if success:
-            (x1, y1, w, h) = [int(v) for v in bbox]
-            res = (x1, y1, x1 + w, y1 + h)
+            self.tracker.init(previews_frame, bbox)
+            success, bbox = self.tracker.update(frame)
+            if success:
+                (x1, y1, w, h) = [int(v) for v in bbox]
+                res = (x1, y1, x1 + w_origin, y1 + h_origin)
         queue.put(res)
 
     def intersection_boxdetection(self, boxdetection):
@@ -163,7 +192,7 @@ class CameraDetection:
         self.box_detection = []
         self.tracking_detection = []
         self.tracking_seuil = 0.3 # surface minimum to link a lost box detection
-        self.lost_frame_max = 25
+        self.lost_frame_max = 30
         self.tracking_index = 0
         self.last_position_max = 5
 
@@ -485,6 +514,24 @@ class CameraDetection:
             if len(box_tracking.last_position) > self.last_position_max:
                 del(box_tracking.last_position[0])
 
+    def update_tracking_detection_occluded(self):
+        """ Update occluded box tracking """
+        result = {}
+        for tracking_detection in self.tracking_detection:
+            tracking_detection.occluded_by_box = []
+            result[tracking_detection.tracking_id] = []
+
+        boxes_sorted = sorted(self.tracking_detection, key=lambda b: b.y2, reverse=True)
+        for i, boxA in enumerate(boxes_sorted):
+            for j in range(i + 1, len(boxes_sorted)):
+                boxB = boxes_sorted[j]  # boxB est plus éloignée (plus haute dans l'image)
+                occ = boxA.intersection_aera(boxB)
+                if occ:
+                    result[boxB.tracking_id].append((boxA.x1,boxA.y1,boxA.x2,boxA.y2))
+
+        for tracking_detection in self.tracking_detection:
+            tracking_detection.occluded_by_box = result[tracking_detection.tracking_id]
+
 
     def get_new_tracking_index(self):
         """ return next tracking index """
@@ -493,7 +540,8 @@ class CameraDetection:
 
     def compute_tracking(self):
         """ compute new tracking with box_detection """
-        box_detections = self.box_detection.copy() #self.get_box_detection_xy()
+        self.update_tracking_detection_occluded()
+        box_detections = self.box_detection.copy()
         tracking_detection_old = self.tracking_detection.copy()
         tracking_detection_index = {}
 
@@ -511,7 +559,6 @@ class CameraDetection:
             if tracking_detection.track_id in lost_track_ids:
                 tracking_detection.lost_frame += 1
                 tracking_detection.state = 'lost'
-                #tracking_detection.update_by_opencvtracking(self.camera_frame, self.camera_frame_previews)
                 update_tracking_detection.append(tracking_detection)
 
             tracking_detection_index[tracking_detection.track_id] = detection_index
@@ -525,6 +572,39 @@ class CameraDetection:
                 tracking_detection.lost_frame = 0
                 tracking_detection.update_by_boxdetection(box_detection)
                 update_tracking_detection.append(tracking_detection)
+
+        # -------- tracking lost + opencv tracker in multiprocessing
+
+        multi_tracking = []
+        multi_response = []
+        multi_index = 0
+
+        for tracking_detection in tracking_detection_old:
+            if tracking_detection.state == 'lost':
+                queue = multiprocessing.Queue()
+                process = multiprocessing.Process(target=tracking_detection.tread_opencvtracking,
+                                        args=(self.camera_frame, self.camera_frame_previews, queue),
+                                        name=f'{tracking_detection.tracking_id}')
+                multi_response.append(queue)
+                multi_tracking.append(process)
+                multi_index += 1
+
+        for tracking in multi_tracking:
+            tracking.start()
+        time.sleep(0.01)
+        for tracking in multi_tracking:
+            tracking.join()
+
+        multi_index = 0
+        for tracking_detection in tracking_detection_old:
+            if tracking_detection.state == 'lost':
+
+                (x1, y1, x2, y2) = multi_response[multi_index].get()
+                tracking_detection.x1 = x1
+                tracking_detection.y1 = y1
+                tracking_detection.x2 = x2
+                tracking_detection.y2 = y2
+                multi_index += 1
 
         # --------- tracking new
         for box_detection in box_detections:
@@ -557,40 +637,8 @@ class CameraDetection:
 
                 update_tracking_detection.append(tracking_detection)
 
-        # -------- tracking lost + opencv tracker
-        multi_tracking = []
-        multi_response = []
-        multi_index = 0
-        for tracking_detection in tracking_detection_old:
-            if tracking_detection.state == 'lost':
-                queue = multiprocessing.Queue()
-                process = multiprocessing.Process(target=tracking_detection.tread_opencvtracking,
-                                        args=(self.camera_frame, self.camera_frame_previews, queue),
-                                        name=f'{tracking_detection.tracking_id}')
-                multi_response.append(queue)
-                multi_tracking.append(process)
-                multi_index += 1
-                #tracking_detection.update_by_opencvtracking(self.camera_frame, self.camera_frame_previews)
 
-        for tracking in multi_tracking:
-            tracking.start()
-        time.sleep(0.01)
-        for tracking in multi_tracking:
-            tracking.join()
-
-        multi_index = 0
-        for tracking_detection in tracking_detection_old:
-            if tracking_detection.state == 'lost':
-
-                (x1, y1, x2, y2) = multi_response[multi_index].get()
-                tracking_detection.x1 = x1
-                tracking_detection.y1 = y1
-                tracking_detection.x2 = x2
-                tracking_detection.y2 = y2
-                multi_index += 1
-
-
-
+        # Filter the lost_frame_max detection
         finale_tracking_detection = []
         for tracking_detection in update_tracking_detection:
             if tracking_detection.lost_frame < self.lost_frame_max:
@@ -637,9 +685,12 @@ detect.load_from_json()
 
 
 # Définir le codec et créer l'objet VideoWriter
-#fourcc = cv2.VideoWriter_fourcc(*'XVID')
-#path = "/tmp/output_camera.avi"
-#out = cv2.VideoWriter(path, fourcc, 20.0, (detect.camera_width, detect.camera_height))
+fourcc = cv2.VideoWriter_fourcc(*'XVID')
+path = "/tmp/output_camera.avi"
+print('-----------', detect.camera_width, detect.camera_height)
+video_width = int(detect.camera_width / 2)
+video_height = int(detect.camera_height / 2)
+out = cv2.VideoWriter(path, fourcc, 5.0, (video_width, video_height))
 
 
 
@@ -670,8 +721,8 @@ while True:
     # Envoie les données
     detect.send_tracking_datas()
 
-
-    #out.write(detect.camera_frame)
+    frame_resized = cv2.resize(frame, (video_width, video_height), interpolation=cv2.INTER_AREA)
+    out.write(frame_resized)
 
     # Quitter avec la touche 'q'
     key = cv2.waitKey(1) & 0xFF
@@ -683,10 +734,10 @@ while True:
 
     # wait a
 
-    while True and key != ord('a'):
+    while False and key != ord('a'):
         key = cv2.waitKey(1) & 0xFF
 
 # Libère les ressources
-#out.release()
+out.release()
 cv2.destroyAllWindows()
 
