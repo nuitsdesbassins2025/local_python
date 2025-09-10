@@ -1,0 +1,21 @@
+# botsort.yaml
+tracker_type: botsort
+model: yolo12m.pt
+
+# --- Paramètres généraux ---
+track_high_thresh: 0.25  # score minimal pour associer une détection existante
+track_low_thresh: 0.15
+new_track_thresh: 0.6
+match_thresh: 0.9
+track_buffer: 15
+frame_rate: 20
+fuse_score: False
+
+# --- BoT-SORT spécifiques ---
+with_reid: False               # active la ré-identification (ReID)
+reid_model: "osnet_x0_25_msmt17.pt"   # modèle ReID par défaut (fourni par ultralytics)
+gmc_method: "sparseOptFlow"   # méthode de calcul du mouvement global (optical flow)
+
+# Paramètres optionnels
+proximity_thresh: 0.5         # seuil de distance entre embeddings ReID
+appearance_thresh: 0.25       # seuil de similarité pour confirmer l'identitéptFlow     # méthode de calcul du mouvement global (optical flow)
