@@ -44,6 +44,7 @@ class TrackingDetection:
         self.label = 'new'
         self.class_id = 0 # Yolo classification 0 = personne
         self.track_id = 0 # Yolo tracking 0 = None
+        self.old_track_ids = []
         self.tracking_id = 0
         self.related_client_id = ''
         self.lost_frame = 0
@@ -63,6 +64,8 @@ class TrackingDetection:
         self.y2_ok = boxdetection.y2
         self.label = f'{self.tracking_id} -' + boxdetection.label
         self.class_id = boxdetection.class_id
+        if boxdetection.track_id and boxdetection.track_id not in self.old_track_ids:
+            self.old_track_ids.append(boxdetection.track_id)
         self.track_id = boxdetection.track_id
         self.lost_frame = 0
         self.tracker = None
@@ -117,12 +120,10 @@ class TrackingDetection:
         h_origin = self.y2 - self.y1
         bbox = self.get_visible_y2()
         # Check 20% of visibility
-        if bbox[3] > 0.2 * (self.y2 - self.y1):
-            if self.tracker is None:
-                self.tracker = cv2.legacy.TrackerCSRT_create()
-
-            self.tracker.init(previews_frame, bbox)
-            success, bbox = self.tracker.update(frame)
+        if bbox[3] > 0.2 * h_origin:
+            tracker = cv2.legacy.TrackerCSRT_create()
+            tracker.init(previews_frame, bbox)
+            success, bbox = tracker.update(frame)
             if success:
                 (x1, y1, w, h) = [int(v) for v in bbox]
                 res = (x1, y1, x1 + w_origin, y1 + h_origin)
@@ -392,7 +393,7 @@ class CameraDetection:
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
 
         for bd in self.tracking_detection:
-            label = f'{bd.tracking_id} - {bd.track_id} - {bd.state}'
+            label = f'{bd.tracking_id} - {bd.old_track_ids} - {bd.state}'
             color = green_color
             if bd.state == 'lost':
                 label += f': {bd.lost_frame}'
@@ -678,8 +679,8 @@ class CameraDetection:
 
 
 detect = CameraDetection()
-#detect.init_camera()
-detect.init_video('/home/joannes/Vidéos/nuitsdesbassins/output_camera_03.avi')
+detect.init_camera()
+#detect.init_video('/home/joannes/Vidéos/nuitsdesbassins/output_camera_03.avi')
 detect.init_model()
 detect.load_from_json()
 
