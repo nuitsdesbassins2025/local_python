@@ -13,10 +13,9 @@ MEDIA_DIR = "media"
 os.makedirs(MEDIA_DIR, exist_ok=True)
 
 
-
 REMOTE_SERVER_URL = "https://nuit-des-bassins-client-9b7778c21473.herokuapp.com/"
 
-#REMOTE_SERVER_URL = "http://localhost:3001/"
+# REMOTE_SERVER_URL = "http://localhost:3000/"
 
 sio_remote = socketio.AsyncClient()
 sio_local = socketio.AsyncServer(async_mode="aiohttp", cors_allowed_origins="*")
@@ -52,20 +51,8 @@ async def on_emit_message(data):
     print("📢 Nouveau message reçu :", data)
 
 
-# @sio_remote.on("pseudo_updated")
-# async def on_pseudo_updated(data):
-#    print("📝 Pseudo mis à jour :", data)
-
-# @sio_remote.on("continuous_data")
-# async def on_continuous_data(data):
-#    print("📝 Data mises à jour :", data)
 
 
-# Va etre remplace par cliet_action_trigger
-@sio_remote.on("action_triggered_by")
-async def on_action_triggered_by(data):
-    print("✅ Action déclenchée :", data)
-    await sio_local.emit("action_triggered_by", data)
 
 
 # A developper / renomer
@@ -77,21 +64,27 @@ async def on_action_triggered_by(data):
     #  await sio_local.emit(  "admin_game_setting", {client_id, action, value })
 
 
+
+
 @sio_remote.on("client_action_trigger")
 async def on_action_triggered(datas):
-    client_id = datas.get("client_id", None)
-    action = datas.get("action", None)
-    action_datas = datas.get("datas", None)
-    print("✅ action reçue du distant :", client_id, action, datas)
+    # client_id = datas.get("client_id", None)
+    # action = datas.get("action", None)
+    # action_datas = datas.get("datas", None)
+    # player_id = datas.get("player_id", None)
+
+    print("☎️ action reçue du distant :",  datas)
 
     emit_data = {
-        "client_id": client_id,
-        "action": action,
-        "datas": action_datas
+        "client_id":  datas.get("client_id", None),
+        "client_datas": datas.get("client_datas", {}),
+        "action": datas.get("action", None),
+        "datas": datas.get("datas", None),
+        "player_id": datas.get("player_id", None)
     }
-
     await sio_local.emit("client_action_trigger", emit_data)
-    print("✅ action reçue du local :", client_id, action, action_datas)
+    print("📞 action transmise au local :", emit_data)
+
 
 
 @sio_local.on("godot_event")
