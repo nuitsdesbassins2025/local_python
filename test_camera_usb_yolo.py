@@ -7,6 +7,9 @@ import time
 import json
 import httpx
 import multiprocessing
+import torch
+from boxmot import BoostTrack
+from pathlib import Path
 
 red_color = (0, 0, 255)
 green_color = (0, 255, 0)
@@ -44,12 +47,14 @@ class TrackingDetection:
         self.label = 'new'
         self.class_id = 0 # Yolo classification 0 = personne
         self.track_id = 0 # Yolo tracking 0 = None
+        self.track_boost_id = 0 # BoostTrack tracking 0 = None
         self.old_track_ids = []
         self.tracking_id = 0
         self.related_client_id = ''
         self.lost_frame = 0
         self.zone_xy = []
         self.state = 'new'
+        self.conf = 0
         self.tracker = None
 
     def update_by_boxdetection(self, boxdetection):
@@ -64,11 +69,12 @@ class TrackingDetection:
         self.y2_ok = boxdetection.y2
         self.label = f'{self.tracking_id} -' + boxdetection.label
         self.class_id = boxdetection.class_id
-        if boxdetection.track_id and boxdetection.track_id not in self.old_track_ids:
+        if self.track_id and boxdetection.track_id != self.track_id and boxdetection.track_id not in self.old_track_ids:
             self.old_track_ids.append(boxdetection.track_id)
         self.track_id = boxdetection.track_id
         self.lost_frame = 0
         self.tracker = None
+        self.conf = boxdetection.conf
 
     def intersection_aera(self, trackingbox):
         """ return intersection aera """
@@ -189,10 +195,11 @@ class CameraDetection:
         self.yolo_filter_class = [0] # 0: personne, list of class to track
         self.yolo_model = None
         self.tracker = cv2.legacy.TrackerCSRT_create()
+        self.boosttrack = None
         self.zone_detection = []
         self.box_detection = []
         self.tracking_detection = []
-        self.tracking_seuil = 0.3 # surface minimum to link a lost box detection
+        self.tracking_seuil = 0.5 # surface minimum to link a lost box detection
         self.lost_frame_max = 30
         self.tracking_index = 0
         self.last_position_max = 5
@@ -305,8 +312,18 @@ class CameraDetection:
         self.camera.release()
 
     def init_model(self):
-        """ Load a yolo model """
+        """ Load a yolo model and tracker """
+        # Set device
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.yolo_model = YOLO(self.yolo_model_name)
+        self.yolo_model.to(device)
+        # Initialize tracker
+        self.boosttrack = BoostTrack(
+            reid_weights=Path('osnet_x0_25_msmt17.pt'),  # chemin vers ton modèle ReID
+            device=device,
+            half=torch.cuda.is_available()  # utilise half precision si tu veux (True pour GPU)
+        )
+
 
     def get_camera_frame(self):
         """ Return the frame of the camera """
@@ -393,7 +410,7 @@ class CameraDetection:
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
 
         for bd in self.tracking_detection:
-            label = f'{bd.tracking_id} - {bd.old_track_ids} - {bd.state}'
+            label = f'{bd.tracking_id} - {bd.track_id} - {bd.track_boost_id} - {bd.state}'
             color = green_color
             if bd.state == 'lost':
                 label += f': {bd.lost_frame}'
@@ -592,7 +609,7 @@ class CameraDetection:
 
         for tracking in multi_tracking:
             tracking.start()
-        time.sleep(0.01)
+        time.sleep(0.001)
         for tracking in multi_tracking:
             tracking.join()
 
@@ -611,6 +628,15 @@ class CameraDetection:
         for box_detection in box_detections:
             # Check if some lost tracking_detection is corresponding
             if box_detection.track_id in new_track_ids:
+
+                # Check old tracking history of TrackingDetection:
+                for tracking_detection in self.tracking_detection:
+                    if box_detection.track_id in tracking_detection.old_track_ids:
+                        tracking_detection.update_by_boxdetection(box_detection)
+                        update_tracking_detection.append(tracking_detection)
+                        break
+
+                # check lost tracking
                 score_proximity = {}
                 if len(lost_track_ids) > 0:
                     for tracking_detection in tracking_detection_old:
@@ -679,8 +705,8 @@ class CameraDetection:
 
 
 detect = CameraDetection()
-detect.init_camera()
-#detect.init_video('/home/joannes/Vidéos/nuitsdesbassins/output_camera_03.avi')
+#detect.init_camera()
+detect.init_video('/home/joannes/Vidéos/nuitsdesbassins/output_camera_03.avi')
 detect.init_model()
 detect.load_from_json()
 
