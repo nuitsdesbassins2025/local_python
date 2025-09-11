@@ -15,7 +15,7 @@ os.makedirs(MEDIA_DIR, exist_ok=True)
 
 REMOTE_SERVER_URL = "https://nuit-des-bassins-client-9b7778c21473.herokuapp.com/"
 
-REMOTE_SERVER_URL = "http://localhost:3000/"
+#REMOTE_SERVER_URL = "http://localhost:3000/"
 
 sio_remote = socketio.AsyncClient()
 sio_local = socketio.AsyncServer(async_mode="aiohttp", cors_allowed_origins="*")
