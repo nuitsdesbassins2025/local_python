@@ -15,7 +15,7 @@ os.makedirs(MEDIA_DIR, exist_ok=True)
 
 REMOTE_SERVER_URL = "https://nuit-des-bassins-client-9b7778c21473.herokuapp.com/"
 
-# REMOTE_SERVER_URL = "http://localhost:3000/"
+REMOTE_SERVER_URL = "http://localhost:3000/"
 
 sio_remote = socketio.AsyncClient()
 sio_local = socketio.AsyncServer(async_mode="aiohttp", cors_allowed_origins="*")
@@ -73,17 +73,26 @@ async def on_action_triggered(datas):
     # action_datas = datas.get("datas", None)
     # player_id = datas.get("player_id", None)
 
-    print("☎️ action reçue du distant :",  datas)
+    # print("☎️ action reçue du distant :",  datas)
 
-    emit_data = {
-        "client_id":  datas.get("client_id", None),
-        "client_datas": datas.get("client_datas", {}),
-        "action": datas.get("action", None),
-        "datas": datas.get("datas", None),
-        "player_id": datas.get("player_id", None)
-    }
-    await sio_local.emit("client_action_trigger", emit_data)
-    print("📞 action transmise au local :", emit_data)
+    # emit_data = {
+    #     "client_id":  datas.get("client_id", None),
+    #     "client_datas": datas.get("client_datas", {}),
+    #     "action": datas.get("action", None),
+    #     "datas": datas.get("datas", None),
+    #     "player_id": datas.get("player_id", None)
+    # }
+    await sio_local.emit("client_action_trigger", datas)
+    print("📞 'client_action_trigger' transmise au local :", datas)
+
+
+@sio_remote.on("web_client_updated")
+async def on_web_client_updated(updated_datas):
+    print("✅ web_client_updated reçu du distant :", updated_datas)
+
+    await sio_local.emit("web_client_updated", updated_datas)
+
+    print("📞 'web_client_updated' transmise au local :", updated_datas)
 
 
 
