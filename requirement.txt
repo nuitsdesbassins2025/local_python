@@ -6,4 +6,9 @@ python-socketio
 aiohttp
 fastapi
 uvicorn
+socketio
 httpx
+boxmot
+pathlib
+torch
+
