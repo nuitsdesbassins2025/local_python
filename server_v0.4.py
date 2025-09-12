@@ -95,6 +95,14 @@ async def on_web_client_updated(updated_datas):
     print("📞 'web_client_updated' transmise au local :", updated_datas)
 
 
+@sio_remote.on("admin_game_settings")
+async def on_admin_game_settings(settings_datas):
+    print("✅ admin_game_settings reçu du distant :", settings_datas)
+
+    await sio_local.emit("admin_game_settings", settings_datas)
+
+    print("📞 'admin_game_settings' transmise au local :", settings_datas)
+
 
 @sio_local.on("godot_event")
 async def on_godot_event(signal_id, datas):
