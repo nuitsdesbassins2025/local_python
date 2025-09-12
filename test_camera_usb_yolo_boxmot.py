@@ -835,10 +835,10 @@ while True:
     detect.track_fps()
     if detect.camera_frame is not None:
         detect.camera_frame_previews = detect.camera_frame
-    else:
-        detect.camera_frame_previews = frame
     detect.camera_frame = detect.get_camera_frame()
-    
+    if detect.camera_frame_previews is None:
+        detect.camera_frame_previews = detect.camera_frame
+
     camera_time = time.time()
     print('------camera_time------', camera_time - start_time)
 
