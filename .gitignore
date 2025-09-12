@@ -4,5 +4,4 @@
 .idea/*
 .~lock.*
 venv
-fastapi_env
-media
+yolo1*
