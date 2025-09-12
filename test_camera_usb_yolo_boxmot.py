@@ -622,7 +622,7 @@ class CameraDetection:
                 update_tracking_detection.append(tracking_detection)
 
         # -------- tracking lost + opencv tracker in multiprocessing
-        """
+   
         multi_tracking = []
         multi_response = []
         multi_index = 0
@@ -653,7 +653,7 @@ class CameraDetection:
                 tracking_detection.x2 = x2
                 tracking_detection.y2 = y2
                 multi_index += 1
-        """
+
         # --------- tracking new
         for box_detection in self.box_detection:
             # Check if some lost tracking_detection is corresponding
