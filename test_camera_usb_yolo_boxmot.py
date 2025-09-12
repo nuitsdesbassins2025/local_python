@@ -368,12 +368,8 @@ class CameraDetection:
     def get_yolo_tracking(self):
         """ return yolo tracking """
         box_detection = []
-        frame = self.get_camera_frame()
-        if self.camera_frame is not None:
-            self.camera_frame_previews = self.camera_frame
-        else:
-            self.camera_frame_previews = frame
-        self.camera_frame = frame
+
+        frame = self.camera_frame
 
         if frame is not None:
 
@@ -837,7 +833,12 @@ while True:
     start_time = time.time()
     # Capture une frame
     detect.track_fps()
-    detect.get_camera_frame()
+    if detect.camera_frame is not None:
+        detect.camera_frame_previews = detect.camera_frame
+    else:
+        detect.camera_frame_previews = frame
+    detect.camera_frame = detect.get_camera_frame()
+    
     camera_time = time.time()
     print('------camera_time------', camera_time - start_time)
 
