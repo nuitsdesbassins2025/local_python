@@ -176,6 +176,7 @@ class CameraDetection:
         self.camera_width = 1280
         self.camera_height = 800
         self.camera_frame = None
+        self.camera_frame_previews = None
         self.frame = None
 
         # resolution: 1280 800 FPS: 11
@@ -368,6 +369,10 @@ class CameraDetection:
         """ return yolo tracking """
         box_detection = []
         frame = self.get_camera_frame()
+        if self.camera_frame is not None:
+            self.camera_frame_previews = self.camera_frame
+        else:
+            self.camera_frame_previews = frame
         self.camera_frame = frame
 
         if frame is not None:
@@ -679,7 +684,7 @@ class CameraDetection:
 
         # --- Update position by tracker
         self.compute_tracking_bytetrack(tracking_detection_old)
-        self.compute_tracking_boottrack()
+        #self.compute_tracking_boottrack()
 
 
         # --- Switch new if lost position is near
@@ -733,7 +738,7 @@ class CameraDetection:
         detections = np.array(detections) if len(detections) > 0 else np.empty((0, 6))
 
         if self.camera_frame is not None:
-            tracked_objects = self.boosttrack.update(detections, self.camera_frame)
+            tracked_objects = self.boosttrack.update(detections, self.camera_frame.copy())
 
             for tracked_object in tracked_objects:
                 tracking_index = tracked_object[7]
