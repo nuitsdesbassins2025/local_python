@@ -50,6 +50,7 @@ class TrackingDetection:
         self.track_id = 0 # Yolo tracking 0 = None
         self.track_boost_id = 0 # BoostTrack tracking 0 = None
         self.track_byte_id = 0  # ByteTrack tracking 0 = None
+        self.track_byte_ids = [] # List of ByteTrack tracking
         self.old_track_ids = []
         self.tracking_id = 0
         self.related_client_id = ''
@@ -190,8 +191,8 @@ class CameraDetection:
         # cap.set(cv2.CAP_PROP_BACKLIGHT, 1)      # Compensation du rétroéclairage
         # cap.set(cv2.CAP_PROP_EXPOSURE, -4)      # Exposition (souvent négatif = automatique désactivé)
 
-        self.yolo_model_name = "yolo12m.pt"
-        self.yolo_conf = 0.4 # seuil de confiance
+        self.yolo_model_name = "yolo12l.pt"
+        self.yolo_conf = 0.2 # seuil de confiance
         self.yolo_filter_class = [0] # 0: personne, list of class to track
         self.yolo_model = None
         self.tracker = cv2.legacy.TrackerCSRT_create()
@@ -325,11 +326,11 @@ class CameraDetection:
             half=torch.cuda.is_available()  # utilise half precision si tu veux (True pour GPU)
         )
         self.bytetrack = ByteTrack(
-            track_thresh=0.5,
+            match_thresh=0.9, # plus eleve plus permissif
+            track_thresh=0.25,
             track_buffer=30,
-            match_thresh=0.8,
-            frame_rate=30,  # adapte selon ta vidéo
 
+            frame_rate=10,  # adapte selon ta vidéo
         )
 
 
@@ -375,6 +376,7 @@ class CameraDetection:
 
                 x1, y1, x2, y2 = map(int, box)  # Conversion en int
                 conf = float(confs[i])
+
                 if track_ids is not None:
                     track_id = int(track_ids[i])
                 else:
@@ -579,7 +581,6 @@ class CameraDetection:
 
         lost_track_ids = list(old_track_ids - box_track_ids)
         new_track_ids = list(box_track_ids - old_track_ids)
-
         update_tracking_detection = []
 
         # -------- tracking lost
@@ -602,10 +603,43 @@ class CameraDetection:
                 tracking_detection.update_by_boxdetection(box_detection)
                 update_tracking_detection.append(tracking_detection)
 
+        # -------- tracking lost + opencv tracker in multiprocessing
+
+        multi_tracking = []
+        multi_response = []
+        multi_index = 0
+
+        for tracking_detection in tracking_detection_old:
+            if tracking_detection.state == 'lost':
+                queue = multiprocessing.Queue()
+                process = multiprocessing.Process(target=tracking_detection.tread_opencvtracking,
+                                        args=(self.camera_frame, self.camera_frame_previews, queue),
+                                        name=f'{tracking_detection.tracking_id}')
+                multi_response.append(queue)
+                multi_tracking.append(process)
+                multi_index += 1
+
+        for tracking in multi_tracking:
+            tracking.start()
+        time.sleep(0.001)
+        for tracking in multi_tracking:
+            tracking.join()
+
+        multi_index = 0
+        for tracking_detection in tracking_detection_old:
+            if tracking_detection.state == 'lost':
+
+                (x1, y1, x2, y2) = multi_response[multi_index].get()
+                tracking_detection.x1 = x1
+                tracking_detection.y1 = y1
+                tracking_detection.x2 = x2
+                tracking_detection.y2 = y2
+                multi_index += 1
+
         # --------- tracking new
         for box_detection in self.box_detection:
             # Check if some lost tracking_detection is corresponding
-            if box_detection.track_id in new_track_ids:
+            if box_detection.track_id and box_detection.track_id in new_track_ids:
                 # Check old tracking history of TrackingDetection:
                 old_tracking = False
                 for tracking_detection in self.tracking_detection:
@@ -627,12 +661,13 @@ class CameraDetection:
         self.tracking_detection = update_tracking_detection
 
         # --- Update position by tracker
+        self.compute_tracking_bytetrack(tracking_detection_old)
         self.compute_tracking_boottrack()
-        self.compute_tracking_bytetrack()
 
-        # --- Swith new if lost position is near
+
+        # --- Switch new if lost position is near
         for new_tracking_detection in self.tracking_detection:
-            if new_tracking_detection.state == 'new':
+            if new_tracking_detection.state == 'new' and new_tracking_detection.track_id:
                 score_proximity = {}
                 for lost_tracking_detection in self.tracking_detection:
                     if lost_tracking_detection.state == 'lost':
@@ -640,6 +675,7 @@ class CameraDetection:
                         score_proximity[score] = lost_tracking_detection
                 if score_proximity:
                     score_max = max(list(score_proximity.keys()))
+                    print(score_proximity.keys())
                     if score_max >= self.tracking_seuil:
                         new_tracking_detection.tracking_id = score_proximity[score_max].tracking_id
                         score_proximity[score_max].state = 'cancel'
@@ -649,7 +685,7 @@ class CameraDetection:
         finale_tracking_id = []
         for state in ['ok', 'new', 'lost']:
             for tracking_detection in self.tracking_detection:
-                if tracking_detection.state == state and \
+                if tracking_detection.state == state and tracking_detection.track_id and \
                         tracking_detection.tracking_id not in finale_tracking_id and \
                         tracking_detection.lost_frame <= self.lost_frame_max:
                     finale_tracking_detection.append(tracking_detection)
@@ -690,7 +726,12 @@ class CameraDetection:
                 tracking_map[tracking_index].x2 = int(tracked_object[2])
                 tracking_map[tracking_index].y2 = int(tracked_object[3])
 
-    def compute_tracking_bytetrack(self):
+            if tracking_map[tracking_index].state == 'new':
+                print('track_boost_id---------------------------------------------------------\n', int(tracked_object[4]), '\n',
+                      tracking_map[tracking_index].tracking_id, '-', tracking_map[tracking_index].track_id, '-',
+                      tracking_map[tracking_index].track_boost_id, '-', tracking_map[tracking_index].track_byte_id)
+
+    def compute_tracking_bytetrack(self, tracking_detection_old):
         """ add tracking boottrack """
         # Extraire les détections
         detections = []
@@ -715,14 +756,23 @@ class CameraDetection:
         for tracked_object in tracked_objects:
             tracking_index = tracked_object[7]
             tracking_map[tracking_index].track_byte_id = int(tracked_object[4])
+            if int(tracked_object[4]) not in tracking_map[tracking_index].track_byte_ids:
+                tracking_map[tracking_index].track_byte_ids.append(int(tracked_object[4]))
             if tracking_map[tracking_index].state == 'lost':
                 tracking_map[tracking_index].x1 = int(tracked_object[0])
                 tracking_map[tracking_index].y1 = int(tracked_object[1])
                 tracking_map[tracking_index].x2 = int(tracked_object[2])
                 tracking_map[tracking_index].y2 = int(tracked_object[3])
 
-            print(tracking_map[tracking_index].tracking_id, '-', tracking_map[tracking_index].track_id, '-',
-                  tracking_map[tracking_index].track_boost_id, '-', tracking_map[tracking_index].track_byte_id)
+            if tracking_map[tracking_index].state == 'new':
+                print('track_byte_id-----------------------------------------------------------------------------\n', tracking_map[tracking_index].tracking_id, '-', tracking_map[tracking_index].track_id, '-',
+                      tracking_map[tracking_index].track_boost_id, '-', tracking_map[tracking_index].track_byte_id)
+                for tracking_detection in tracking_detection_old:
+                    if tracking_detection.track_byte_id == int(tracked_object[4]):
+                        print('-----------tracking_detection_old--tracking_id-----', tracking_detection.tracking_id)
+                    print(tracking_detection.tracking_id, tracking_detection.track_byte_id, tracking_detection.track_byte_ids)
+
+
 
     def send_tracking_datas(self):
         """ send tracking data """
@@ -753,8 +803,8 @@ class CameraDetection:
 
 
 detect = CameraDetection()
-detect.init_camera()
-#detect.init_video('/home/joannes/Vidéos/nuitsdesbassins/output_camera_03.avi')
+#detect.init_camera()
+detect.init_video('/home/joannes/Vidéos/nuitsdesbassins/output_camera_001.avi')
 detect.init_model()
 detect.load_from_json()
 
@@ -768,6 +818,7 @@ video_height = int(detect.camera_height / 2)
 out = cv2.VideoWriter(path, fourcc, 5.0, (video_width, video_height))
 
 
+sleep_key = False
 
 while True:
     start_time = time.time()
@@ -775,23 +826,28 @@ while True:
     detect.track_fps()
     detect.get_camera_frame()
     camera_time = time.time()
-    print('------camera_time------', camera_time - start_time)
+    #print('------camera_time------', camera_time - start_time)
 
     detect.get_yolo_tracking()
     yolo_time = time.time()
-    print('------yolo_time------', yolo_time - camera_time)
+    #print('------yolo_time------', yolo_time - camera_time)
 
     detect.compute_tracking()
     detect_time = time.time()
-    print('------detect_time------', detect_time - yolo_time)
+    #print('------detect_time------', detect_time - yolo_time)
 
     #out.write(detect.camera_frame)
     # Dessiner les boîtes sur l'image originale
+    frame = detect.camera_frame
+
+    #print('------frame.shape---------', frame.shape)
     frame = detect.show_tracking(detect.camera_frame)
     frame = detect.show_zone_detection(frame)
 
     # Affiche la frame
     cv2.imshow("Camera USB", frame)
+    detect_send = time.time()
+    #print('------detect_send------', detect_send - detect_time)
 
     # Envoie les données
     detect.send_tracking_datas()
@@ -804,13 +860,17 @@ while True:
     if key == ord('q'):
         detect.save_to_json()
         break
+    elif key == ord('a'):
+        sleep_key = True
     elif key:
         detect.key_press(key)
 
     # wait a
 
-    while False and key != ord('a'):
+    while sleep_key:
         key = cv2.waitKey(1) & 0xFF
+        if key == ord('a'):
+            sleep_key = False
 
 # Libère les ressources
 out.release()
