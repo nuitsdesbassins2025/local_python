@@ -11,6 +11,7 @@ import torch
 from boxmot import BoostTrack
 from boxmot import ByteTrack
 from pathlib import Path
+import threading
 
 red_color = (0, 0, 255)
 green_color = (0, 255, 0)
@@ -175,7 +176,8 @@ class CameraDetection:
         self.camera_width = 1280
         self.camera_height = 800
         self.camera_frame = None
-        self.camera_frame_previews = None
+        self.frame = None
+
         # resolution: 1280 800 FPS: 11
         # resolution: 640 480: FPS: 33
         # resolution: 320 240 FPS: 200
@@ -205,7 +207,6 @@ class CameraDetection:
         self.lost_frame_max = 30
         self.tracking_index = 0
         self.last_position_max = 5
-
         self.sending_url = 'http://localhost:8000/camera/detection'
 
         self.time_start = None
@@ -214,6 +215,54 @@ class CameraDetection:
 
         self.key_plot = 0
         self.key_action = ''
+
+        self.lock = threading.Lock()
+        self.running = True
+        self.thread = None
+
+
+    def update(self):
+        while self.running:
+            if self.camera is not None:
+                ret, frame = self.camera.read()
+                if ret:
+                    with self.lock:
+                        self.frame = frame
+            else:
+                time.sleep(0.1)
+
+    def detect_camera(self):
+        """ detect camera if needed, put USB number"""
+        camera_usb_number = 0
+        cap = cv2.VideoCapture(camera_usb_number)
+        while not cap.isOpened():
+            camera_usb_number += 1
+            cap = cv2.VideoCapture(camera_usb_number)
+            if camera_usb_number > 8:
+                self.camera_usb_number = None
+                break
+
+        self.camera_usb_number = camera_usb_number
+
+    def init_camera(self):
+        """ open camera """
+        if self.camera_usb_number is None:
+            self.detect_camera()
+        self.camera = cv2.VideoCapture(self.camera_usb_number)
+        self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, self.camera_width)
+        self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, self.camera_height)
+        self.thread = threading.Thread(target=self.update, daemon=True)
+        self.thread.start()
+
+    def get_camera_frame(self):
+        with self.lock:
+            return self.frame.copy() if self.frame is not None else None
+
+    def stop(self):
+        self.running = False
+        self.thread.join()
+        self.camera.release()
+
 
     def save_to_json(self, filepath="config.json"):
         """ Save config to file """
@@ -278,26 +327,8 @@ class CameraDetection:
 
         return frame
 
-    def detect_camera(self):
-        """ detect camera if needed, put USB number"""
-        camera_usb_number = 0
-        cap = cv2.VideoCapture(camera_usb_number)
-        while not cap.isOpened():
-            camera_usb_number += 1
-            cap = cv2.VideoCapture(camera_usb_number)
-            if camera_usb_number > 8:
-                self.camera_usb_number = None
-                break
 
-        self.camera_usb_number = camera_usb_number
 
-    def init_camera(self):
-        """ open camera """
-        if self.camera_usb_number is None:
-            self.detect_camera()
-        self.camera = cv2.VideoCapture(self.camera_usb_number)
-        self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, self.camera_width)
-        self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, self.camera_height)
 
     def init_video(self, video_path=None):
         """ Ouvre un fichier vidéo """
@@ -333,25 +364,11 @@ class CameraDetection:
             frame_rate=10,  # adapte selon ta vidéo
         )
 
-
-    def get_camera_frame(self):
-        """ Return the frame of the camera """
-        ret, frame = self.camera.read()
-        if ret:
-            if self.camera_frame is not None:
-                self.camera_frame_previews = self.camera_frame
-            else:
-                self.camera_frame_previews = frame
-
-            self.camera_frame = frame
-        else:
-            # error
-            pass
-
     def get_yolo_tracking(self):
         """ return yolo tracking """
         box_detection = []
-        frame = self.camera_frame
+        frame = self.get_camera_frame()
+        self.camera_frame = frame
 
         if frame is not None:
 
@@ -715,16 +732,17 @@ class CameraDetection:
 
         detections = np.array(detections) if len(detections) > 0 else np.empty((0, 6))
 
-        tracked_objects = self.boosttrack.update(detections, self.camera_frame)
+        if self.camera_frame is not None:
+            tracked_objects = self.boosttrack.update(detections, self.camera_frame)
 
-        for tracked_object in tracked_objects:
-            tracking_index = tracked_object[7]
-            tracking_map[tracking_index].track_boost_id = int(tracked_object[4])
-            if tracking_map[tracking_index].state == 'lost':
-                tracking_map[tracking_index].x1 = int(tracked_object[0])
-                tracking_map[tracking_index].y1 = int(tracked_object[1])
-                tracking_map[tracking_index].x2 = int(tracked_object[2])
-                tracking_map[tracking_index].y2 = int(tracked_object[3])
+            for tracked_object in tracked_objects:
+                tracking_index = tracked_object[7]
+                tracking_map[tracking_index].track_boost_id = int(tracked_object[4])
+                if tracking_map[tracking_index].state == 'lost':
+                    tracking_map[tracking_index].x1 = int(tracked_object[0])
+                    tracking_map[tracking_index].y1 = int(tracked_object[1])
+                    tracking_map[tracking_index].x2 = int(tracked_object[2])
+                    tracking_map[tracking_index].y2 = int(tracked_object[3])
 
             if tracking_map[tracking_index].state == 'new':
                 print('track_boost_id---------------------------------------------------------\n', int(tracked_object[4]), '\n',
@@ -751,28 +769,20 @@ class CameraDetection:
 
         detections = np.array(detections) if len(detections) > 0 else np.empty((0, 6))
 
-        tracked_objects = self.bytetrack.update(detections, self.camera_frame)
+        if self.camera_frame is not None:
+            tracked_objects = self.bytetrack.update(detections, self.camera_frame)
 
-        for tracked_object in tracked_objects:
-            tracking_index = tracked_object[7]
-            tracking_map[tracking_index].track_byte_id = int(tracked_object[4])
-            if int(tracked_object[4]) not in tracking_map[tracking_index].track_byte_ids:
-                tracking_map[tracking_index].track_byte_ids.append(int(tracked_object[4]))
-            if tracking_map[tracking_index].state == 'lost':
-                tracking_map[tracking_index].x1 = int(tracked_object[0])
-                tracking_map[tracking_index].y1 = int(tracked_object[1])
-                tracking_map[tracking_index].x2 = int(tracked_object[2])
-                tracking_map[tracking_index].y2 = int(tracked_object[3])
+            for tracked_object in tracked_objects:
+                tracking_index = tracked_object[7]
+                tracking_map[tracking_index].track_byte_id = int(tracked_object[4])
+                if tracking_map[tracking_index].state == 'lost':
+                    tracking_map[tracking_index].x1 = int(tracked_object[0])
+                    tracking_map[tracking_index].y1 = int(tracked_object[1])
+                    tracking_map[tracking_index].x2 = int(tracked_object[2])
+                    tracking_map[tracking_index].y2 = int(tracked_object[3])
 
-            if tracking_map[tracking_index].state == 'new':
-                print('track_byte_id-----------------------------------------------------------------------------\n', tracking_map[tracking_index].tracking_id, '-', tracking_map[tracking_index].track_id, '-',
+                print(tracking_map[tracking_index].tracking_id, '-', tracking_map[tracking_index].track_id, '-',
                       tracking_map[tracking_index].track_boost_id, '-', tracking_map[tracking_index].track_byte_id)
-                for tracking_detection in tracking_detection_old:
-                    if tracking_detection.track_byte_id == int(tracked_object[4]):
-                        print('-----------tracking_detection_old--tracking_id-----', tracking_detection.tracking_id)
-                    print(tracking_detection.tracking_id, tracking_detection.track_byte_id, tracking_detection.track_byte_ids)
-
-
 
     def send_tracking_datas(self):
         """ send tracking data """
@@ -813,10 +823,8 @@ detect.load_from_json()
 fourcc = cv2.VideoWriter_fourcc(*'XVID')
 path = "/tmp/output_camera.avi"
 print('-----------', detect.camera_width, detect.camera_height)
-video_width = int(detect.camera_width / 2)
-video_height = int(detect.camera_height / 2)
-#out = cv2.VideoWriter(path, fourcc, 5.0, (video_width, video_height))
 
+#out = cv2.VideoWriter(path, fourcc, 5.0, (detect.camera_width, detect.camera_height))
 
 sleep_key = False
 
@@ -843,9 +851,9 @@ while True:
     frame = detect.show_zone_detection(frame)
 
     # Affiche la frame
-    cv2.imshow("Camera USB", frame)
-    detect_send = time.time()
-    #print('------detect_send------', detect_send - detect_time)
+
+    if frame is not None:
+        cv2.imshow("Camera USB", frame)
 
     # Envoie les données
     detect.send_tracking_datas()
@@ -865,7 +873,9 @@ while True:
 
     # wait a
 
-    while sleep_key:
+
+
+    while False and key != ord('a'):
         key = cv2.waitKey(1) & 0xFF
         if key == ord('a'):
             sleep_key = False
