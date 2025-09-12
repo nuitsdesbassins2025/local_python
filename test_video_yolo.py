@@ -197,6 +197,7 @@ class CameraDetection:
         self.camera = cv2.VideoCapture(self.camera_usb_number)
         self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, self.camera_width)
         self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, self.camera_height)
+        self.camera.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
     def init_video(self, video_path=None):
         """ Ouvre un fichier vidéo """
@@ -448,11 +449,10 @@ class CameraDetection:
 
 
 detect = CameraDetection()
-#detect.init_camera()
-detect.init_video('/home/joannes/Vidéos/nuitsdesbassins/output_camera_03.avi')
+detect.init_camera()
+#detect.init_video('/home/joannes/Vidéos/nuitsdesbassins/output_camera_03.avi')
 detect.init_model()
 
-print(dir(detect.yolo_model))
 #print('-------------tracker_type-----', detect.yolo_model.track_low_thresh)
 #yolo_model.conf_thres = 0.25
 #time.sleep(10)
@@ -468,21 +468,23 @@ detect.load_from_json()
 
 while True:
     # Capture une frame
-    detect.track_fps()
+    #detect.track_fps()
     detect.get_camera_frame()
-    detect.get_yolo_tracking()
-    detect.compute_tracking()
+    #detect.get_yolo_tracking()
+    #detect.compute_tracking()
 
     # Dessiner les boîtes sur l'image originale
     #out.write(detect.camera_frame)
-    frame = detect.show_tracking(detect.camera_frame)
-    frame = detect.show_zone_detection(frame)
+    frame = detect.camera_frame
+
+    #frame = detect.show_tracking(detect.camera_frame)
+    #frame = detect.show_zone_detection(frame)
 
     # Affiche la frame
     cv2.imshow("Camera USB", frame)
 
     # Envoie les données
-    detect.send_tracking_datas()
+    #detect.send_tracking_datas()
 
 
     # Quitter avec la touche 'q'
@@ -493,9 +495,9 @@ while True:
     elif key:
         detect.key_press(key)
 
-    # wait a
-    while key != ord('a'):
-        key = cv2.waitKey(1) & 0xFF
+
+
+
 
 # Libère les ressources
 #out.release()

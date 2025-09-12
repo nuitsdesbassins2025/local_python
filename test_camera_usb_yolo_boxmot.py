@@ -604,7 +604,7 @@ class CameraDetection:
                 update_tracking_detection.append(tracking_detection)
 
         # -------- tracking lost + opencv tracker in multiprocessing
-
+        """
         multi_tracking = []
         multi_response = []
         multi_index = 0
@@ -635,7 +635,7 @@ class CameraDetection:
                 tracking_detection.x2 = x2
                 tracking_detection.y2 = y2
                 multi_index += 1
-
+        """
         # --------- tracking new
         for box_detection in self.box_detection:
             # Check if some lost tracking_detection is corresponding
@@ -803,8 +803,8 @@ class CameraDetection:
 
 
 detect = CameraDetection()
-#detect.init_camera()
-detect.init_video('/home/joannes/Vidéos/nuitsdesbassins/output_camera_001.avi')
+detect.init_camera()
+#detect.init_video('/home/joannes/Vidéos/nuitsdesbassins/output_camera_001.avi')
 detect.init_model()
 detect.load_from_json()
 
@@ -815,7 +815,7 @@ path = "/tmp/output_camera.avi"
 print('-----------', detect.camera_width, detect.camera_height)
 video_width = int(detect.camera_width / 2)
 video_height = int(detect.camera_height / 2)
-out = cv2.VideoWriter(path, fourcc, 5.0, (video_width, video_height))
+#out = cv2.VideoWriter(path, fourcc, 5.0, (video_width, video_height))
 
 
 sleep_key = False
@@ -826,22 +826,20 @@ while True:
     detect.track_fps()
     detect.get_camera_frame()
     camera_time = time.time()
-    #print('------camera_time------', camera_time - start_time)
+    print('------camera_time------', camera_time - start_time)
 
     detect.get_yolo_tracking()
     yolo_time = time.time()
-    #print('------yolo_time------', yolo_time - camera_time)
+    print('------yolo_time------', yolo_time - camera_time)
 
     detect.compute_tracking()
     detect_time = time.time()
-    #print('------detect_time------', detect_time - yolo_time)
+    print('------detect_time------', detect_time - yolo_time)
 
     #out.write(detect.camera_frame)
     # Dessiner les boîtes sur l'image originale
     frame = detect.camera_frame
-
-    #print('------frame.shape---------', frame.shape)
-    frame = detect.show_tracking(detect.camera_frame)
+    frame = detect.show_tracking(frame)
     frame = detect.show_zone_detection(frame)
 
     # Affiche la frame
@@ -852,8 +850,8 @@ while True:
     # Envoie les données
     detect.send_tracking_datas()
 
-    frame_resized = cv2.resize(frame, (video_width, video_height), interpolation=cv2.INTER_AREA)
-    out.write(frame_resized)
+    #frame_resized = cv2.resize(frame, (video_width, video_height), interpolation=cv2.INTER_AREA)
+    #out.write(frame_resized)
 
     # Quitter avec la touche 'q'
     key = cv2.waitKey(1) & 0xFF
@@ -873,6 +871,6 @@ while True:
             sleep_key = False
 
 # Libère les ressources
-out.release()
+#out.release()
 cv2.destroyAllWindows()
 
