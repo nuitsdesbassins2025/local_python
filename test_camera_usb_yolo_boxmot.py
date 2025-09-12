@@ -176,6 +176,7 @@ class CameraDetection:
         self.camera_width = 1280
         self.camera_height = 800
         self.camera_frame = None
+        self.camera_frame_previews = None
         self.frame = None
 
         # resolution: 1280 800 FPS: 11
@@ -367,8 +368,8 @@ class CameraDetection:
     def get_yolo_tracking(self):
         """ return yolo tracking """
         box_detection = []
-        frame = self.camera_frame
 
+        frame = self.camera_frame
 
         if frame is not None:
 
@@ -733,7 +734,7 @@ class CameraDetection:
         detections = np.array(detections) if len(detections) > 0 else np.empty((0, 6))
 
         if self.camera_frame is not None:
-            tracked_objects = self.boosttrack.update(detections, self.camera_frame)
+            tracked_objects = self.boosttrack.update(detections, self.camera_frame.copy())
 
             for tracked_object in tracked_objects:
                 tracking_index = tracked_object[7]
@@ -832,7 +833,12 @@ while True:
     start_time = time.time()
     # Capture une frame
     detect.track_fps()
+    if detect.camera_frame is not None:
+        detect.camera_frame_previews = detect.camera_frame
+    else:
+        detect.camera_frame_previews = frame
     detect.camera_frame = detect.get_camera_frame()
+    
     camera_time = time.time()
     print('------camera_time------', camera_time - start_time)
 
