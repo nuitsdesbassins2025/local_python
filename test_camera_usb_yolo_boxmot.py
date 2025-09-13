@@ -699,6 +699,7 @@ class CameraDetection:
 
     def compute_tracking2(self):
         """ compute new tracking with box_detection """
+        self.update_tracking_detection_occluded()
         self.compute_tracker()
 
         tracking_detection_old = self.tracking_detection.copy()
@@ -729,6 +730,34 @@ class CameraDetection:
                 tracking_detection.update_by_boxdetection(box_detection)
 
                 box_detection_ok.append(box_detection)
+
+        # --------- tracking lost
+        for tracking_detection in self.tracking_detection:
+            if tracking_detection.state == 'tracking':
+                tracking_detection.state = 'lost'
+                tracking_detection.lost_frame += 1
+
+                # --------- Check new box_detection
+                score_proximity = {}
+                for box_detection in self.box_detection:
+                    # Check if some box_detection is corresponding
+                    if box_detection in box_detection_ok:
+                        continue
+                    elif box_detection.track_id or box_detection.track_byte_id or box_detection.track_boost_id:
+                        score = tracking_detection.intersection_boxdetection(box_detection)
+                        score_proximity[score] = box_detection
+
+                if score_proximity:
+                    score_max = max(list(score_proximity.keys()))
+                    if score_max >= self.tracking_seuil:
+                        tracking_detection.state = 'ok'
+                        tracking_detection.lost_frame = 0
+                        tracking_detection.update_by_boxdetection(box_detection)
+
+                        box_detection_ok.append(box_detection)
+
+
+
 
         # --------- tracking new
         for box_detection in self.box_detection:
