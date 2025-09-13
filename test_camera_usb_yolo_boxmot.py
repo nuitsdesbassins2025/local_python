@@ -12,6 +12,8 @@ from boxmot import BoostTrack
 from boxmot import ByteTrack
 from pathlib import Path
 import threading
+import argparse
+
 
 red_color = (0, 0, 255)
 green_color = (0, 255, 0)
@@ -175,6 +177,7 @@ class CameraDetection:
         self.camera = None
         self.camera_width = 1280
         self.camera_height = 800
+        self.camera_fps = []
         self.camera_frame = None
         self.camera_frame_previews = None
         self.frame = None
@@ -218,7 +221,7 @@ class CameraDetection:
         self.key_action = ''
 
         self.lock = threading.Lock()
-        self.running = True
+        self.running = False
         self.thread = None
 
 
@@ -229,8 +232,10 @@ class CameraDetection:
                 if ret:
                     with self.lock:
                         self.frame = frame
-            else:
-                time.sleep(0.1)
+                        self.camera_fps.append(time.time())
+                        if len(self.camera_fps) > 10:
+                            del(self.camera_fps[0])
+            time.sleep(0.001)
 
     def detect_camera(self):
         """ detect camera if needed, put USB number"""
@@ -242,26 +247,56 @@ class CameraDetection:
             if camera_usb_number > 8:
                 self.camera_usb_number = None
                 break
-
+        cap.release()
         self.camera_usb_number = camera_usb_number
 
     def init_camera(self):
         """ open camera """
         if self.camera_usb_number is None:
             self.detect_camera()
+
         self.camera = cv2.VideoCapture(self.camera_usb_number)
-        self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, self.camera_width)
-        self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, self.camera_height)
+
+        resolutions = [(800, 600), (1280, 800), (1280, 720)]
+        for (w, h) in resolutions:
+            self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, w)
+            self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, h)
+            rw = int(self.camera.get(cv2.CAP_PROP_FRAME_WIDTH))
+            rh = int(self.camera.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            if (rw, rh) == (w, h):
+                self.camera_width = w
+                self.camera_height = h
+                break
+
         self.thread = threading.Thread(target=self.update, daemon=True)
+        self.running = True
         self.thread.start()
 
     def get_camera_frame(self):
-        with self.lock:
-            return self.frame.copy() if self.frame is not None else None
 
-    def stop(self):
-        self.running = False
-        self.thread.join()
+        if self.camera_frame is not None:
+            self.camera_frame_previews = self.camera_frame
+
+        if self.running:
+            # input camera
+            with self.lock:
+                frame = self.frame.copy() if self.frame is not None else None
+        elif self.camera is not None:
+            # input video
+            ret, frame = self.camera.read()
+            if not ret:
+                frame = None
+        else:
+            frame = None
+
+        self.camera_frame = frame
+        if frame is not None and self.camera_frame_previews is None:
+            self.camera_frame_previews = frame
+
+    def stop_camera(self):
+        if self.running:
+            self.running = False
+            self.thread.join()
         self.camera.release()
 
 
@@ -288,8 +323,6 @@ class CameraDetection:
         with open(filepath, "r", encoding="utf-8") as f:
             data = json.load(f)
 
-        self.camera_width = data['camera_width']
-        self.camera_height = data['camera_height']
         self.zone_detection = []
         for zone_detection in data['zone_detection']:
             new_zone_detection = ZoneDetection()
@@ -328,18 +361,15 @@ class CameraDetection:
 
         return frame
 
-
-
-
     def init_video(self, video_path=None):
-        """ Ouvre un fichier vidéo """
-        try:
-            self.camera = cv2.VideoCapture(video_path)
-            # Vérifier si l'ouverture a réussi
-            if not self.camera.isOpened():
-                raise ValueError("Impossible d'ouvrir la source vidéo")
-        except:
-            pass
+        """ Ouvre un fichier vidéo pour test """
+
+        self.camera = cv2.VideoCapture(video_path)
+        # Vérifier si l'ouverture a réussi
+        if not self.camera.isOpened():
+            raise ValueError("Impossible d'ouvrir la source vidéo")
+        self.camera_width = int(self.camera.get(cv2.CAP_PROP_FRAME_WIDTH))
+        self.camera_height = int(self.camera.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
     def end_camera(self):
         """ resource free """
@@ -369,7 +399,7 @@ class CameraDetection:
         """ return yolo tracking """
         box_detection = []
 
-        frame = self.camera_frame
+        frame = self.camera_frame.copy()
 
         if frame is not None:
 
@@ -388,10 +418,6 @@ class CameraDetection:
             for i, box in enumerate(detections):
 
                 class_id = int(classes[i])
-                # Filtrer pour ne garder que les personnes: yolo_filter_class = [0]
-                if self.yolo_filter_class and class_id not in self.yolo_filter_class:
-                    continue
-
                 x1, y1, x2, y2 = map(int, box)  # Conversion en int
                 conf = float(confs[i])
 
@@ -400,10 +426,8 @@ class CameraDetection:
                 else:
                     track_id = 0
 
-                class_name = self.yolo_model.names[class_id]
-                label = f"{track_id} - {class_name} {conf:.2f}"
-
-                new_track =  BoxDetection(x1, y1, x2, y2, label, conf, class_id, track_id)
+                label = f"{track_id} - {class_id} {conf:.2f}"
+                new_track = BoxDetection(x1, y1, x2, y2, label, conf, class_id, track_id)
                 box_detection.append(new_track)
 
         self.box_detection = box_detection
@@ -792,15 +816,16 @@ class CameraDetection:
         tracking_datas = []
 
         for tracking_detection in self.tracking_detection:
-            tracking_datas.append({
-                "tracking_id": int(tracking_detection.tracking_id),
-                "related_client_id": tracking_detection.related_client_id,
-                "posX": int(100.0 * tracking_detection.x),
-                "posY": int(100.0 * tracking_detection.y),
-                "state": tracking_detection.state,
-                "lost_frame": tracking_detection.lost_frame,
-                "zone": "game",
-                })
+            if tracking_detection.state in ['new', 'ok', 'lost']:
+                tracking_datas.append({
+                    "tracking_id": int(tracking_detection.tracking_id),
+                    "related_client_id": tracking_detection.related_client_id,
+                    "posX": int(100.0 * tracking_detection.x),
+                    "posY": int(100.0 * tracking_detection.y),
+                    "state": tracking_detection.state,
+                    "lost_frame": tracking_detection.lost_frame,
+                    "zone": "game",
+                    })
 
         data = {
             'tracking_fps': tracking_fps,
@@ -808,85 +833,97 @@ class CameraDetection:
             }
 
         try:
-            response = httpx.post(self.sending_url, json=data, timeout=1.0)
+            t = threading.Thread(target=httpx.post(self.sending_url, json=data, timeout=1.0), args=(self.sending_url, data))
+            t.start()
+            # response = httpx.post(self.sending_url, json=data, timeout=1.0)
         except Exception as e:
             print("❌ Erreur lors de l'envoi :", e)
 
 
-detect = CameraDetection()
-detect.init_camera()
-#detect.init_video('/home/joannes/Vidéos/nuitsdesbassins/output_camera_001.avi')
-detect.init_model()
-detect.load_from_json()
+    def main(self):
+        """ launch captation """
+        parser = argparse.ArgumentParser(description="Client HTTP en threading")
+        parser.add_argument("--video", required=False, help="Path of the video training")
+        parser.add_argument("--show", required=False, help="View camera screen")
+        parser.add_argument("--output", required=False, help="Path to save video")
+
+        args = parser.parse_args()
+
+        if args.video:
+            self.init_video(args.video)
+        else:
+            detect.init_camera()
+
+        self.init_model()
+        self.load_from_json()
+
+        out = None
+        if args.output:
+            # Définir le codec et créer l'objet VideoWriter
+            fourcc = cv2.VideoWriter_fourcc(*'XVID')
+            out = cv2.VideoWriter(args.output, fourcc, 5.0, (self.camera_width, self.camera_height))
+
+        sleep_key = False
+
+        while True:
+            start_time = time.time()
+            # Capture une frame
+            self.track_fps()
+
+            self.get_camera_frame()
+            camera_time = time.time()
+
+            self.get_yolo_tracking()
+            yolo_time = time.time()
+
+            self.compute_tracking()
+            detect_time = time.time()
+
+            if out is not None:
+                out.write(self.camera_frame)
+
+            if args.show:
+                # Print information
+                print('------camera_time------', camera_time - start_time)
+                print('------yolo_time------', yolo_time - camera_time)
+                print('------detect_time------', detect_time - yolo_time)
+
+                # Dessiner les boîtes sur l'image originale
+                frame = self.camera_frame
+                frame = self.show_tracking(frame)
+                frame = self.show_zone_detection(frame)
+
+                if frame is not None:
+                    cv2.imshow("Camera USB", frame)
+
+            # Envoie les données
+            self.send_tracking_datas()
+
+            #out.write(frame)
+
+            # Quitter avec la touche 'q'
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord('q'):
+                self.save_to_json()
+                break
+            elif key == ord('a'):
+                sleep_key = True
+            elif key:
+                self.key_press(key)
+
+            while False and key != ord('a'):
+                key = cv2.waitKey(1) & 0xFF
+                if key == ord('a'):
+                    sleep_key = False
+
+        # Libère les ressources
+        if out is not None:
+            out.release()
+        self.stop_camera()
+        if args.show:
+            cv2.destroyAllWindows()
 
 
-# Définir le codec et créer l'objet VideoWriter
-fourcc = cv2.VideoWriter_fourcc(*'XVID')
-path = "/tmp/output_camera.avi"
-print('-----------', detect.camera_width, detect.camera_height)
-
-#out = cv2.VideoWriter(path, fourcc, 5.0, (detect.camera_width, detect.camera_height))
-
-sleep_key = False
-
-while True:
-    start_time = time.time()
-    # Capture une frame
-    detect.track_fps()
-    if detect.camera_frame is not None:
-        detect.camera_frame_previews = detect.camera_frame
-    detect.camera_frame = detect.get_camera_frame()
-    if detect.camera_frame_previews is None:
-        detect.camera_frame_previews = detect.camera_frame
-
-    camera_time = time.time()
-    print('------camera_time------', camera_time - start_time)
-
-    detect.get_yolo_tracking()
-    yolo_time = time.time()
-    print('------yolo_time------', yolo_time - camera_time)
-
-    detect.compute_tracking()
-    detect_time = time.time()
-    print('------detect_time------', detect_time - yolo_time)
-
-    #out.write(detect.camera_frame)
-    # Dessiner les boîtes sur l'image originale
-    frame = detect.camera_frame
-    frame = detect.show_tracking(frame)
-    frame = detect.show_zone_detection(frame)
-
-    # Affiche la frame
-
-    if frame is not None:
-        cv2.imshow("Camera USB", frame)
-
-    # Envoie les données
-    detect.send_tracking_datas()
-
-    #frame_resized = cv2.resize(frame, (video_width, video_height), interpolation=cv2.INTER_AREA)
-    #out.write(frame_resized)
-
-    # Quitter avec la touche 'q'
-    key = cv2.waitKey(1) & 0xFF
-    if key == ord('q'):
-        detect.save_to_json()
-        break
-    elif key == ord('a'):
-        sleep_key = True
-    elif key:
-        detect.key_press(key)
-
-    # wait a
-
-
-
-    while False and key != ord('a'):
-        key = cv2.waitKey(1) & 0xFF
-        if key == ord('a'):
-            sleep_key = False
-
-# Libère les ressources
-#out.release()
-cv2.destroyAllWindows()
-
+if __name__ == "__main__":
+    detect = CameraDetection()
+    detect.main()
