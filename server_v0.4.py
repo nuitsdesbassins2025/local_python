@@ -15,7 +15,7 @@ os.makedirs(MEDIA_DIR, exist_ok=True)
 
 REMOTE_SERVER_URL = "https://nuit-des-bassins-client-9b7778c21473.herokuapp.com/"
 
-#REMOTE_SERVER_URL = "http://localhost:3000/"
+# REMOTE_SERVER_URL = "http://localhost:3000/"
 
 sio_remote = socketio.AsyncClient()
 sio_local = socketio.AsyncServer(async_mode="aiohttp", cors_allowed_origins="*")
@@ -88,11 +88,17 @@ async def on_action_triggered(datas):
 
 @sio_remote.on("web_client_updated")
 async def on_web_client_updated(updated_datas):
+
     print("✅ web_client_updated reçu du distant :", updated_datas)
 
     await sio_local.emit("web_client_updated", updated_datas)
 
     print("📞 'web_client_updated' transmise au local :", updated_datas)
+
+
+
+
+
 
 
 @sio_remote.on("admin_game_settings")
@@ -121,6 +127,24 @@ async def on_godot_event(signal_id, datas):
     await sio_remote.emit("godot_event_transfer", emit_data)
     await sio_local.emit("godot_event_transfer", emit_data)
     #print("✅ action reçue du local :", event_type, action, event_datas)
+
+
+@sio_local.on("godot_info")
+async def on_godot_event(signal_id, datas):
+    event_type = datas.get("event_type", None)
+    event_datas = datas.get("event_datas", None)
+    client_id = datas.get("client_id", None)
+
+    print("✅ Godot info : event_type :", event_type, ", event_datas : ", event_datas)
+
+    emit_data = {
+        "client_id": client_id,
+        "event_type": event_type,
+        "event_datas": event_datas
+    }
+
+    await sio_remote.emit("godot_info_transfer", emit_data)
+    await sio_local.emit("godot_info_transfer", emit_data)
 
 
 
