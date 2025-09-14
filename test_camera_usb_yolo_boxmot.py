@@ -29,6 +29,9 @@ class BoxDetection:
         self.conf = conf
         self.class_id = class_id # Yolo classification 0 = personne
         self.track_id = track_id # Yolo tracking 0 = None
+        self.track_boost_id = 0 # BoostTrack tracking 0 = None
+        self.track_byte_id = 0  # ByteTrack tracking 0 = None
+
 
 
 class TrackingDetection:
@@ -50,11 +53,15 @@ class TrackingDetection:
         self.show_last_position = []
         self.label = 'new'
         self.class_id = 0 # Yolo classification 0 = personne
+
         self.track_id = 0 # Yolo tracking 0 = None
         self.track_boost_id = 0 # BoostTrack tracking 0 = None
         self.track_byte_id = 0  # ByteTrack tracking 0 = None
-        self.track_byte_ids = [] # List of ByteTrack tracking
-        self.old_track_ids = []
+
+        self.track_ids = []
+        self.track_boost_ids = []
+        self.track_byte_ids = []
+
         self.tracking_id = 0
         self.related_client_id = ''
         self.lost_frame = 0
@@ -69,17 +76,19 @@ class TrackingDetection:
         self.y1 = boxdetection.y1
         self.x2 = boxdetection.x2
         self.y2 = boxdetection.y2
+
         self.x1_ok = boxdetection.x1
         self.y1_ok = boxdetection.y1
         self.x2_ok = boxdetection.x2
         self.y2_ok = boxdetection.y2
-        self.label = f'{self.tracking_id} -' + boxdetection.label
+
         self.class_id = boxdetection.class_id
         self.conf = boxdetection.conf
-        if self.track_id and boxdetection.track_id != self.track_id and boxdetection.track_id not in self.old_track_ids:
-            self.old_track_ids.append(boxdetection.track_id)
+
         self.track_id = boxdetection.track_id
-        self.lost_frame = 0
+        self.track_boost_id = boxdetection.track_boost_id
+        self.track_byte_id = boxdetection.track_byte_id
+
         self.tracker = None
 
     def intersection_aera(self, trackingbox):
@@ -611,6 +620,160 @@ class CameraDetection:
         self.tracking_index += 1
         return int(self.tracking_index)
 
+    def compute_tracker(self):
+        """ add tracking boottrack """
+        # Extraire les détections
+        detections = []
+        tracking_index = 0
+        tracking_map = {}
+
+        for box_detection in self.box_detection:
+            detections.append([
+                box_detection.x1,
+                box_detection.y1,
+                box_detection.x2,
+                box_detection.y2,
+                box_detection.conf,
+                box_detection.class_id])
+            tracking_map[tracking_index] = box_detection
+            tracking_index += 1
+
+        detections = np.array(detections) if len(detections) > 0 else np.empty((0, 6))
+
+        if self.camera_frame is not None:
+
+            tracked_objects = self.boosttrack.update(detections, self.camera_frame)
+            for tracked_object in tracked_objects:
+                tracking_index = int(tracked_object[7])
+                tracking_map[tracking_index].track_boost_id = int(tracked_object[4])
+
+            tracked_objects = self.bytetrack.update(detections, self.camera_frame)
+            for tracked_object in tracked_objects:
+                tracking_index = int(tracked_object[7])
+                tracking_map[tracking_index].track_byte_id = int(tracked_object[4])
+
+    def tracking_detection_save(self):
+        """ init tracker index """
+        for tracking_detection in self.tracking_detection:
+
+            if tracking_detection.track_id and tracking_detection.track_id not in tracking_detection.track_ids:
+                tracking_detection.track_ids.append(tracking_detection.track_id)
+            tracking_detection.track_id = 0
+
+            if tracking_detection.track_boost_id and tracking_detection.track_boost_id not in tracking_detection.track_boost_ids:
+                tracking_detection.track_boost_ids.append(tracking_detection.track_boost_id)
+            tracking_detection.track_boost_id = 0
+
+            if tracking_detection.track_byte_id and tracking_detection.track_byte_id not in tracking_detection.track_byte_ids:
+                tracking_detection.track_byte_ids.append(tracking_detection.track_byte_id)
+            tracking_detection.track_byte_id = 0
+
+            tracking_detection.state = 'tracking'
+
+    def get_history_track_ids(self):
+        """ return the history of track_ids """
+        res = {}
+        for tracking_detection in self.tracking_detection:
+            for tracking_history in tracking_detection.track_ids:
+                if tracking_history not in list(res.keys()):
+                    res[tracking_history] = tracking_detection
+        return res
+
+    def get_history_track_boost_ids(self):
+        """ return the history of track_ids """
+        res = {}
+        for tracking_detection in self.tracking_detection:
+            for tracking_history in tracking_detection.track_boost_ids:
+                if tracking_history not in list(res.keys()):
+                    res[tracking_history] = tracking_detection
+        return res
+
+    def get_history_track_byte_ids(self):
+        """ return the history of track_ids """
+        res = {}
+        for tracking_detection in self.tracking_detection:
+            for tracking_history in tracking_detection.track_byte_ids:
+                if tracking_history not in list(res.keys()):
+                    res[tracking_history] = tracking_detection
+        return res
+
+    def compute_tracking2(self):
+        """ compute new tracking with box_detection """
+        self.update_tracking_detection_occluded()
+        self.compute_tracker()
+
+        tracking_detection_old = self.tracking_detection.copy()
+
+        self.tracking_detection_save()
+        history_track_ids = self.get_history_track_ids()
+        history_track_boost_ids = self.get_history_track_boost_ids()
+        history_track_byte_ids = self.get_history_track_byte_ids()
+
+        update_tracking_detection = []
+        box_detection_ok = []
+
+        # --------- tracking update
+        for box_detection in self.box_detection:
+
+            if box_detection.track_id in list(history_track_ids.keys()):
+                tracking_detection = history_track_ids[box_detection.track_id]
+            elif box_detection.track_boost_id in list(history_track_boost_ids.keys()):
+                tracking_detection = history_track_boost_ids[box_detection.track_boost_id]
+            elif box_detection.track_byte_id in list(history_track_byte_ids.keys()):
+                tracking_detection = history_track_byte_ids[box_detection.track_byte_id]
+            else:
+                tracking_detection = None
+
+            if tracking_detection:
+                tracking_detection.state = 'ok'
+                tracking_detection.lost_frame = 0
+                tracking_detection.update_by_boxdetection(box_detection)
+
+                box_detection_ok.append(box_detection)
+
+        # --------- tracking lost
+        for tracking_detection in self.tracking_detection:
+            if tracking_detection.state == 'tracking':
+                tracking_detection.state = 'lost'
+                tracking_detection.lost_frame += 1
+
+                # --------- Check new box_detection
+                score_proximity = {}
+                for box_detection in self.box_detection:
+                    # Check if some box_detection is corresponding
+                    if box_detection in box_detection_ok:
+                        continue
+                    elif box_detection.track_id or box_detection.track_byte_id or box_detection.track_boost_id:
+                        score = tracking_detection.intersection_boxdetection(box_detection)
+                        score_proximity[score] = box_detection
+
+                if score_proximity:
+                    score_max = max(list(score_proximity.keys()))
+                    if score_max >= self.tracking_seuil:
+                        tracking_detection.state = 'ok'
+                        tracking_detection.lost_frame = 0
+                        tracking_detection.update_by_boxdetection(box_detection)
+
+                        box_detection_ok.append(box_detection)
+
+
+
+
+        # --------- tracking new
+        for box_detection in self.box_detection:
+            # Check if some lost tracking_detection is corresponding
+            if box_detection in box_detection_ok:
+                continue
+            elif box_detection.track_id or box_detection.track_byte_id or box_detection.track_boost_id:
+                # New
+                tracking_detection = TrackingDetection()
+                tracking_detection.tracking_id = self.get_new_tracking_index()
+                tracking_detection.state = 'new'
+                tracking_detection.update_by_boxdetection(box_detection)
+                self.tracking_detection.append(tracking_detection)
+
+
+
     def compute_tracking(self):
         """ compute new tracking with box_detection """
         #self.update_tracking_detection_occluded()
@@ -758,7 +921,7 @@ class CameraDetection:
         detections = np.array(detections) if len(detections) > 0 else np.empty((0, 6))
 
         if self.camera_frame is not None:
-            tracked_objects = self.boosttrack.update(detections, self.camera_frame.copy())
+            tracked_objects = self.boosttrack.update(detections, self.camera_frame)
 
             for tracked_object in tracked_objects:
                 tracking_index = tracked_object[7]
@@ -876,7 +1039,7 @@ class CameraDetection:
             self.get_yolo_tracking()
             yolo_time = time.time()
 
-            self.compute_tracking()
+            self.compute_tracking2()
             detect_time = time.time()
 
             if out is not None:
@@ -911,7 +1074,7 @@ class CameraDetection:
             elif key:
                 self.key_press(key)
 
-            while False and key != ord('a'):
+            while True and key != ord('a'):
                 key = cv2.waitKey(1) & 0xFF
                 if key == ord('a'):
                     sleep_key = False
