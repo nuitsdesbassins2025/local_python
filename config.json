@@ -1,6 +1,6 @@
 {
-    "camera_width": 800,
-    "camera_height": 600,
+    "camera_width": 640,
+    "camera_height": 400,
     "zone_detection": [
         [
             [
