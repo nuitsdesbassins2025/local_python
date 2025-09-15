@@ -72,6 +72,7 @@ class TrackingDetection:
         self.not_track_byte_ids = []
         self.not_track_ocsort_ids = []
 
+        self.tracking_ok = 0
 
         self.tracking_id = 0
         self.related_client_id = ''
@@ -300,7 +301,7 @@ class CameraDetection:
     def get_camera_frame(self):
 
         if self.camera_frame is not None:
-            self.camera_frame_previews = self.camera_frame
+            self.camera_frame_previews = self.camera_frame.copy()
 
         if self.running:
             # input camera
@@ -439,6 +440,7 @@ class CameraDetection:
             reid_weights=Path('osnet_x0_25_msmt17.pt'),  # chemin vers ton modèle ReID
             det_thresh=0.5,
             min_hits=1,
+            max_age=20,
             device=device,
             half=torch.cuda.is_available()  # utilise half precision si tu veux (True pour GPU)
         )
@@ -456,6 +458,7 @@ class CameraDetection:
         self.bytetrack = ByteTrack(
             match_thresh=0.8, # plus eleve plus permissif
             track_thresh=0.45,
+            track_buffer=20,
             frame_rate=10,  # adapte selon ta vidéo
         )
         """
@@ -476,6 +479,7 @@ class CameraDetection:
         """
         self.ocsort = OcSort(
             det_thresh=0.25,
+            max_age=20,
             inertia=0.3,
             min_hits=1,
         )
@@ -542,7 +546,7 @@ class CameraDetection:
 
     def show_tracking(self, frame):
         """ Add yolo box detection on frame """
-        label_fps = f'FPS: {self.time_fps}'
+        label_fps = f'{frame.shape} FPS: {self.time_fps}'
         cv2.putText(frame, label_fps, (10, 10),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
 
@@ -558,6 +562,8 @@ class CameraDetection:
             cv2.rectangle(frame, (bd.x1, bd.y1), (bd.x2, bd.y2), color, 2)
             cv2.putText(frame, label, (bd.x1, bd.y1 - 10),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+            cv2.putText(frame, f' {bd.tracking_ok}', (bd.x1, bd.y1 + 15),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
 
             xp = int(0.5 * (bd.x2 - bd.x1)) + bd.x1
             yp = bd.y2
@@ -820,6 +826,7 @@ class CameraDetection:
 
                 most_box_tracking.state = 'ok'
                 most_box_tracking.lost_frame = 0
+                most_box_tracking.tracking_ok += 1
                 most_box_tracking.update_by_boxdetection(box_detection)
                 box_detection_ok.append(box_detection)
 
