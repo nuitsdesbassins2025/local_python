@@ -10,9 +10,11 @@ import multiprocessing
 import torch
 from boxmot import BoostTrack
 from boxmot import ByteTrack
+from boxmot import OcSort
 from pathlib import Path
 import threading
 import argparse
+from collections import Counter
 
 
 red_color = (0, 0, 255)
@@ -31,6 +33,7 @@ class BoxDetection:
         self.track_id = track_id # Yolo tracking 0 = None
         self.track_boost_id = 0 # BoostTrack tracking 0 = None
         self.track_byte_id = 0  # ByteTrack tracking 0 = None
+        self.track_ocsort_id = 0  # ocsort tracking 0 = None
 
 
 
@@ -57,10 +60,18 @@ class TrackingDetection:
         self.track_id = 0 # Yolo tracking 0 = None
         self.track_boost_id = 0 # BoostTrack tracking 0 = None
         self.track_byte_id = 0  # ByteTrack tracking 0 = None
+        self.track_ocsort_id = 0  # ocsort tracking 0 = None
 
         self.track_ids = []
         self.track_boost_ids = []
         self.track_byte_ids = []
+        self.track_ocsort_ids = []
+
+        self.not_track_ids = []
+        self.not_track_boost_ids = []
+        self.not_track_byte_ids = []
+        self.not_track_ocsort_ids = []
+
 
         self.tracking_id = 0
         self.related_client_id = ''
@@ -85,9 +96,12 @@ class TrackingDetection:
         self.class_id = boxdetection.class_id
         self.conf = boxdetection.conf
 
-        self.track_id = boxdetection.track_id
-        self.track_boost_id = boxdetection.track_boost_id
-        self.track_byte_id = boxdetection.track_byte_id
+        for field_track in ['track_id', 'track_boost_id', 'track_byte_id', 'track_ocsort_id']:
+            tracker_id = getattr(self, field_track, 0)
+            not_tracker_ids = getattr(self, 'not_' + field_track + 's', 0)
+            tracker_boxdetection_id = getattr(boxdetection, field_track, 0)
+            if tracker_id not in not_tracker_ids:
+                setattr(self, field_track, tracker_boxdetection_id)
 
         self.tracker = None
 
@@ -142,7 +156,8 @@ class TrackingDetection:
         bbox = self.get_visible_y2()
         # Check 20% of visibility
         if bbox[3] > 0.2 * h_origin:
-            tracker = cv2.legacy.TrackerCSRT_create()
+            # TrackerMIL_create TrackerCSRT_create
+            tracker = cv2.legacy.TrackerMIL_create()
             tracker.init(previews_frame, bbox)
             success, bbox = tracker.update(frame)
             if success:
@@ -207,12 +222,13 @@ class CameraDetection:
         # cap.set(cv2.CAP_PROP_EXPOSURE, -4)      # Exposition (souvent négatif = automatique désactivé)
 
         self.yolo_model_name = "yolo12l.pt"
-        self.yolo_conf = 0.2 # seuil de confiance
+        self.yolo_conf = 0.1 # seuil de confiance
         self.yolo_filter_class = [0] # 0: personne, list of class to track
         self.yolo_model = None
         self.tracker = cv2.legacy.TrackerCSRT_create()
         self.boosttrack = None
         self.bytetrack = None
+        self.ocsort = None
         self.zone_detection = []
         self.box_detection = []
         self.tracking_detection = []
@@ -391,17 +407,75 @@ class CameraDetection:
         self.yolo_model = YOLO(self.yolo_model_name)
         self.yolo_model.to(device)
         # Initialize tracker
+        """
+        Initializes the BoostTrack tracker with various parameters.
+
+        Args:
+            reid_weights: Path to the re-identification model weights.
+            device: Device to run the model on (e.g., 'cpu', 'cuda').
+            half: Whether to use half-precision for computations.
+            max_age: 60, Maximum allowed frames without update.
+            min_hits: 3, Minimum hits required to output a track.
+            det_thresh: 0.6, Detection confidence threshold.
+            iou_threshold: 0.3, IoU threshold for association.
+            use_ecc: Whether to use ECC for camera motion compensation.
+            min_box_area: 10, Minimum box area for detections.
+            aspect_ratio_thresh: Aspect ratio threshold for detections.
+            cmc_method: Method for camera motion compensation.
+            lambda_iou: 0.5 Weight for IoU-based association.
+            lambda_mhd: 0.25 Weight for Mahalanobis distance-based association.
+            lambda_shape: 0.25 Weight for shape-based association.
+            use_dlo_boost: true Whether to use DLO boost.
+            use_duo_boost: true Whether to use DUO boost.
+            dlo_boost_coef: 0.65 Coefficient for DLO boost.
+            s_sim_corr: Whether to use shape similarity correction.
+            use_rich_s: Whether to use rich shape features.
+            use_sb: false Whether to use soft-BIoU.
+            use_vt: false Whether to use visual tracking.
+            with_reid: Whether to use re-identification.
+            per_class: If True, enables per-class tracking, where tracks are managed separately for each class.
+        """
         self.boosttrack = BoostTrack(
             reid_weights=Path('osnet_x0_25_msmt17.pt'),  # chemin vers ton modèle ReID
+            det_thresh=0.5,
             device=device,
             half=torch.cuda.is_available()  # utilise half precision si tu veux (True pour GPU)
         )
-        self.bytetrack = ByteTrack(
-            match_thresh=0.9, # plus eleve plus permissif
-            track_thresh=0.25,
-            track_buffer=30,
+        """
+        BYTETracker: A tracking algorithm based on ByteTrack, which utilizes motion-based tracking.
 
+        Args:
+            min_conf (float, optional): 0.1 Threshold for detection confidence. Detections below this threshold are discarded.
+            track_thresh (float, optional): 0.45 Threshold for detection confidence. Detections above this threshold are considered for tracking in the first association round.
+            match_thresh (float, optional): 0.8 Threshold for the matching step in data association. Controls the maximum distance allowed between tracklets and detections for a match.
+            track_buffer (int, optional): 25 Number of frames to keep a track alive after it was last detected. A longer buffer allows for more robust tracking but may increase identity switches.
+            frame_rate (int, optional): 30 Frame rate of the video being processed. Used to scale the track buffer size.
+            per_class (bool, optional): Whether to perform per-class tracking. If True, tracks are maintained separately for each object class.
+        """
+        self.bytetrack = ByteTrack(
+            match_thresh=0.8, # plus eleve plus permissif
+            track_thresh=0.45,
             frame_rate=10,  # adapte selon ta vidéo
+        )
+        """
+        OCSort Tracker: A tracking algorithm that utilizes motion-based tracking.
+
+        Args:
+            per_class (bool, optional): Whether to perform per-class tracking. If True, tracks are maintained separately for each object class.
+            det_thresh (float, optional): Detection confidence threshold. Detections below this threshold are ignored in the first association step.
+            max_age (int, optional): 30 Maximum number of frames to keep a track alive without any detections.
+            min_hits (int, optional): 3 Minimum number of hits required to confirm a track.
+            asso_threshold (float, optional): 0.3 Threshold for the association step in data association. Controls the maximum distance allowed between tracklets and detections for a match.
+            delta_t (int, optional): 3 Time delta for velocity estimation in Kalman Filter.
+            asso_func (str, optional): Association function to use for data association. Options include "iou" for IoU-based association.
+            inertia (float, optional): 0.2 Weight for inertia in motion modeling. Higher values make tracks less responsive to changes.
+            use_byte (bool, optional): false Whether to use BYTE association in the second association step.
+            Q_xy_scaling (float, optional): 0.01 Scaling factor for the process noise covariance in the Kalman Filter for position coordinates.
+            Q_s_scaling (float, optional): 0.0001 Scaling factor for the process noise covariance in the Kalman Filter for scale coordinates.
+        """
+        self.ocsort = OcSort(
+            det_thresh=0.25,
+            inertia=0.3,
         )
 
     def get_yolo_tracking(self):
@@ -471,7 +545,7 @@ class CameraDetection:
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
 
         for bd in self.tracking_detection:
-            label = f'{bd.tracking_id} - {bd.track_id} - {bd.track_boost_id} - {bd.track_byte_id} - {bd.state}'
+            label = f'{bd.tracking_id}: {bd.track_id}-{bd.track_boost_id}-{bd.track_byte_id}-{bd.track_ocsort_id}-{bd.state}-{bd.conf}'
             color = green_color
             if bd.state == 'lost':
                 label += f': {bd.lost_frame}'
@@ -499,6 +573,10 @@ class CameraDetection:
                 ry = int(bd.zone_xy[0][1] * 100.0)
                 cv2.putText(frame, f"x: {rx} y: {ry}", (xp, yp + 10),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, red_color, 2)
+        for bd_void in self.box_detection:
+            if not (bd_void.track_id and bd_void.track_boost_id and bd_void.track_byte_id):
+                color = (0, 0, 0)
+                cv2.rectangle(frame, (bd_void.x1, bd_void.y1), (bd_void.x2, bd_void.y2), color, 1)
 
         return frame
 
@@ -652,50 +730,59 @@ class CameraDetection:
                 tracking_index = int(tracked_object[7])
                 tracking_map[tracking_index].track_byte_id = int(tracked_object[4])
 
+            tracked_objects = self.ocsort.update(detections, self.camera_frame)
+            for tracked_object in tracked_objects:
+                tracking_index = int(tracked_object[7])
+                tracking_map[tracking_index].track_ocsort_id = int(tracked_object[4])
+
+
     def tracking_detection_save(self):
         """ init tracker index """
+        max_tracking = 3
+        history_track = self.get_history_track()
+
         for tracking_detection in self.tracking_detection:
+            for field_track in ['track_id', 'track_boost_id', 'track_byte_id', 'track_ocsort_id']:
+                track_id = getattr(tracking_detection, field_track, 0)
+                if not track_id:
+                    continue
 
-            if tracking_detection.track_id and tracking_detection.track_id not in tracking_detection.track_ids:
-                tracking_detection.track_ids.append(tracking_detection.track_id)
-            tracking_detection.track_id = 0
+                for other_tracking_detection in self.tracking_detection:
+                    not_track_ids = getattr(other_tracking_detection, 'not_' + field_track + 's', [])
+                    if other_tracking_detection != tracking_detection:
+                        if track_id not in not_track_ids:
+                            not_track_ids.append(track_id)
 
-            if tracking_detection.track_boost_id and tracking_detection.track_boost_id not in tracking_detection.track_boost_ids:
-                tracking_detection.track_boost_ids.append(tracking_detection.track_boost_id)
-            tracking_detection.track_boost_id = 0
+        for tracking_detection in self.tracking_detection:
+            for field_track in ['track_id', 'track_boost_id', 'track_byte_id', 'track_ocsort_id']:
+                track_id = getattr(tracking_detection, field_track, 0)
+                track_ids = getattr(tracking_detection, field_track + 's', [])
+                not_track_ids = getattr(tracking_detection, 'not_' + field_track + 's', [])
+                if not track_id:
+                    continue
 
-            if tracking_detection.track_byte_id and tracking_detection.track_byte_id not in tracking_detection.track_byte_ids:
-                tracking_detection.track_byte_ids.append(tracking_detection.track_byte_id)
-            tracking_detection.track_byte_id = 0
+                if track_id not in not_track_ids and track_id not in track_ids:
+                    track_ids.append(track_id)
+                    if len(track_ids) > max_tracking:
+                        del (track_ids[0])
+                track_id = 0
 
             tracking_detection.state = 'tracking'
 
-    def get_history_track_ids(self):
-        """ return the history of track_ids """
+    def get_history_track(self):
+        """ return a dic with """
         res = {}
+        for field_track in ['track_id', 'track_boost_id', 'track_byte_id', 'track_ocsort_id']:
+            res[field_track] = {}
+
         for tracking_detection in self.tracking_detection:
-            for tracking_history in tracking_detection.track_ids:
-                if tracking_history not in list(res.keys()):
-                    res[tracking_history] = tracking_detection
+            for field_track in ['track_id', 'track_boost_id', 'track_byte_id', 'track_ocsort_id']:
+                for tracking_history in getattr(tracking_detection, field_track + 's', []):
+                    if tracking_history not in list(res[field_track].keys()):
+                        res[field_track][tracking_history] = tracking_detection
         return res
 
-    def get_history_track_boost_ids(self):
-        """ return the history of track_ids """
-        res = {}
-        for tracking_detection in self.tracking_detection:
-            for tracking_history in tracking_detection.track_boost_ids:
-                if tracking_history not in list(res.keys()):
-                    res[tracking_history] = tracking_detection
-        return res
 
-    def get_history_track_byte_ids(self):
-        """ return the history of track_ids """
-        res = {}
-        for tracking_detection in self.tracking_detection:
-            for tracking_history in tracking_detection.track_byte_ids:
-                if tracking_history not in list(res.keys()):
-                    res[tracking_history] = tracking_detection
-        return res
 
     def compute_tracking2(self):
         """ compute new tracking with box_detection """
@@ -705,30 +792,36 @@ class CameraDetection:
         tracking_detection_old = self.tracking_detection.copy()
 
         self.tracking_detection_save()
-        history_track_ids = self.get_history_track_ids()
-        history_track_boost_ids = self.get_history_track_boost_ids()
-        history_track_byte_ids = self.get_history_track_byte_ids()
+
+
+        history_track = self.get_history_track()
+        print('-----history_track-------', history_track)
+
 
         update_tracking_detection = []
         box_detection_ok = []
 
         # --------- tracking update
+        box_detection_tracking = []
+
         for box_detection in self.box_detection:
+            tracking_ids = []
+            for field_track in ['track_id', 'track_boost_id', 'track_byte_id', 'track_ocsort_id']:
+                tracker_id = getattr(box_detection, field_track, 0)
+                if tracker_id in list(history_track[field_track].keys()):
+                    tracking_ids.append(history_track[field_track][tracker_id])
 
-            if box_detection.track_id in list(history_track_ids.keys()):
-                tracking_detection = history_track_ids[box_detection.track_id]
-            elif box_detection.track_boost_id in list(history_track_boost_ids.keys()):
-                tracking_detection = history_track_boost_ids[box_detection.track_boost_id]
-            elif box_detection.track_byte_id in list(history_track_byte_ids.keys()):
-                tracking_detection = history_track_byte_ids[box_detection.track_byte_id]
-            else:
-                tracking_detection = None
+            counter = Counter(tracking_ids)
+            if counter:
+                most_box_tracking, count = counter.most_common(1)[0]
+                for field_track in ['track_id', 'track_boost_id', 'track_byte_id', 'track_ocsort_id']:
+                    tracker_id = getattr(box_detection, field_track, 0)
+                    if tracker_id in list(history_track[field_track].keys()) and history_track[field_track][tracker_id] != most_box_tracking:
+                        setattr(box_detection, field_track, 0)
 
-            if tracking_detection:
-                tracking_detection.state = 'ok'
-                tracking_detection.lost_frame = 0
-                tracking_detection.update_by_boxdetection(box_detection)
-
+                most_box_tracking.state = 'ok'
+                most_box_tracking.lost_frame = 0
+                most_box_tracking.update_by_boxdetection(box_detection)
                 box_detection_ok.append(box_detection)
 
         # --------- tracking lost
@@ -747,7 +840,7 @@ class CameraDetection:
                         score = tracking_detection.intersection_boxdetection(box_detection)
                         score_proximity[score] = box_detection
 
-                if score_proximity:
+                if False and score_proximity:
                     score_max = max(list(score_proximity.keys()))
                     if score_max >= self.tracking_seuil:
                         tracking_detection.state = 'ok'
@@ -755,9 +848,6 @@ class CameraDetection:
                         tracking_detection.update_by_boxdetection(box_detection)
 
                         box_detection_ok.append(box_detection)
-
-
-
 
         # --------- tracking new
         for box_detection in self.box_detection:
@@ -772,205 +862,6 @@ class CameraDetection:
                 tracking_detection.update_by_boxdetection(box_detection)
                 self.tracking_detection.append(tracking_detection)
 
-
-
-    def compute_tracking(self):
-        """ compute new tracking with box_detection """
-        #self.update_tracking_detection_occluded()
-
-        tracking_detection_old = self.tracking_detection.copy()
-        tracking_detection_index = {}
-
-        old_track_ids = set(x.track_id for x in tracking_detection_old)
-        box_track_ids = set(x.track_id for x in self.box_detection)
-
-        lost_track_ids = list(old_track_ids - box_track_ids)
-        new_track_ids = list(box_track_ids - old_track_ids)
-        update_tracking_detection = []
-
-        # -------- tracking lost
-        detection_index = 0
-        for tracking_detection in tracking_detection_old:
-            if tracking_detection.track_id in lost_track_ids:
-                tracking_detection.lost_frame += 1
-                tracking_detection.state = 'lost'
-                update_tracking_detection.append(tracking_detection)
-
-            tracking_detection_index[tracking_detection.track_id] = detection_index
-            detection_index += 1
-
-        # --------- tracking update
-        for box_detection in self.box_detection:
-            if box_detection.track_id not in new_track_ids:
-                tracking_detection = tracking_detection_old[tracking_detection_index[box_detection.track_id]]
-                tracking_detection.state = 'ok'
-                tracking_detection.lost_frame = 0
-                tracking_detection.update_by_boxdetection(box_detection)
-                update_tracking_detection.append(tracking_detection)
-
-        # -------- tracking lost + opencv tracker in multiprocessing
-   
-        multi_tracking = []
-        multi_response = []
-        multi_index = 0
-
-        for tracking_detection in tracking_detection_old:
-            if tracking_detection.state == 'lost':
-                queue = multiprocessing.Queue()
-                process = multiprocessing.Process(target=tracking_detection.tread_opencvtracking,
-                                        args=(self.camera_frame, self.camera_frame_previews, queue),
-                                        name=f'{tracking_detection.tracking_id}')
-                multi_response.append(queue)
-                multi_tracking.append(process)
-                multi_index += 1
-
-        for tracking in multi_tracking:
-            tracking.start()
-        time.sleep(0.001)
-        for tracking in multi_tracking:
-            tracking.join()
-
-        multi_index = 0
-        for tracking_detection in tracking_detection_old:
-            if tracking_detection.state == 'lost':
-
-                (x1, y1, x2, y2) = multi_response[multi_index].get()
-                tracking_detection.x1 = x1
-                tracking_detection.y1 = y1
-                tracking_detection.x2 = x2
-                tracking_detection.y2 = y2
-                multi_index += 1
-
-        # --------- tracking new
-        for box_detection in self.box_detection:
-            # Check if some lost tracking_detection is corresponding
-            if box_detection.track_id and box_detection.track_id in new_track_ids:
-                # Check old tracking history of TrackingDetection:
-                old_tracking = False
-                for tracking_detection in self.tracking_detection:
-                    if box_detection.track_id in tracking_detection.old_track_ids:
-                        tracking_detection.update_by_boxdetection(box_detection)
-                        update_tracking_detection.append(tracking_detection)
-                        old_tracking = True
-                        break
-
-                if not old_tracking:
-                    tracking_detection = TrackingDetection()
-                    tracking_detection.tracking_id = self.get_new_tracking_index()
-                    tracking_detection.state = 'new'
-                    tracking_detection.update_by_boxdetection(box_detection)
-
-                update_tracking_detection.append(tracking_detection)
-
-
-        self.tracking_detection = update_tracking_detection
-
-        # --- Update position by tracker
-        self.compute_tracking_bytetrack(tracking_detection_old)
-        #self.compute_tracking_boottrack()
-
-
-        # --- Switch new if lost position is near
-        for new_tracking_detection in self.tracking_detection:
-            if new_tracking_detection.state == 'new' and new_tracking_detection.track_id:
-                score_proximity = {}
-                for lost_tracking_detection in self.tracking_detection:
-                    if lost_tracking_detection.state == 'lost':
-                        score = new_tracking_detection.intersection_boxdetection(lost_tracking_detection)
-                        score_proximity[score] = lost_tracking_detection
-                if score_proximity:
-                    score_max = max(list(score_proximity.keys()))
-                    print(score_proximity.keys())
-                    if score_max >= self.tracking_seuil:
-                        new_tracking_detection.tracking_id = score_proximity[score_max].tracking_id
-                        score_proximity[score_max].state = 'cancel'
-
-        # Filter the lost_frame_max detection
-        finale_tracking_detection = []
-        finale_tracking_id = []
-        for state in ['ok', 'new', 'lost']:
-            for tracking_detection in self.tracking_detection:
-                if tracking_detection.state == state and tracking_detection.track_id and \
-                        tracking_detection.tracking_id not in finale_tracking_id and \
-                        tracking_detection.lost_frame <= self.lost_frame_max:
-                    finale_tracking_detection.append(tracking_detection)
-                    finale_tracking_id.append(finale_tracking_id)
-
-        self.tracking_detection = finale_tracking_detection
-
-        self.update_xy_tracking()
-
-    def compute_tracking_boottrack(self):
-        """ add tracking boottrack """
-        # Extraire les détections
-        detections = []
-        tracking_index = 0
-        tracking_map = {}
-
-        for tracking_detection in self.tracking_detection:
-            detections.append([
-                tracking_detection.x1,
-                tracking_detection.y1,
-                tracking_detection.x2,
-                tracking_detection.y2,
-                tracking_detection.conf,
-                tracking_detection.class_id])
-            tracking_map[tracking_index] = tracking_detection
-            tracking_index += 1
-
-        detections = np.array(detections) if len(detections) > 0 else np.empty((0, 6))
-
-        if self.camera_frame is not None:
-            tracked_objects = self.boosttrack.update(detections, self.camera_frame)
-
-            for tracked_object in tracked_objects:
-                tracking_index = tracked_object[7]
-                tracking_map[tracking_index].track_boost_id = int(tracked_object[4])
-                if tracking_map[tracking_index].state == 'lost':
-                    tracking_map[tracking_index].x1 = int(tracked_object[0])
-                    tracking_map[tracking_index].y1 = int(tracked_object[1])
-                    tracking_map[tracking_index].x2 = int(tracked_object[2])
-                    tracking_map[tracking_index].y2 = int(tracked_object[3])
-
-            if tracking_map[tracking_index].state == 'new':
-                print('track_boost_id---------------------------------------------------------\n', int(tracked_object[4]), '\n',
-                      tracking_map[tracking_index].tracking_id, '-', tracking_map[tracking_index].track_id, '-',
-                      tracking_map[tracking_index].track_boost_id, '-', tracking_map[tracking_index].track_byte_id)
-
-    def compute_tracking_bytetrack(self, tracking_detection_old):
-        """ add tracking boottrack """
-        # Extraire les détections
-        detections = []
-        tracking_index = 0
-        tracking_map = {}
-
-        for tracking_detection in self.tracking_detection:
-            detections.append([
-                tracking_detection.x1,
-                tracking_detection.y1,
-                tracking_detection.x2,
-                tracking_detection.y2,
-                tracking_detection.conf,
-                tracking_detection.class_id])
-            tracking_map[tracking_index] = tracking_detection
-            tracking_index += 1
-
-        detections = np.array(detections) if len(detections) > 0 else np.empty((0, 6))
-
-        if self.camera_frame is not None:
-            tracked_objects = self.bytetrack.update(detections, self.camera_frame)
-
-            for tracked_object in tracked_objects:
-                tracking_index = tracked_object[7]
-                tracking_map[tracking_index].track_byte_id = int(tracked_object[4])
-                if tracking_map[tracking_index].state == 'lost':
-                    tracking_map[tracking_index].x1 = int(tracked_object[0])
-                    tracking_map[tracking_index].y1 = int(tracked_object[1])
-                    tracking_map[tracking_index].x2 = int(tracked_object[2])
-                    tracking_map[tracking_index].y2 = int(tracked_object[3])
-
-                print(tracking_map[tracking_index].tracking_id, '-', tracking_map[tracking_index].track_id, '-',
-                      tracking_map[tracking_index].track_boost_id, '-', tracking_map[tracking_index].track_byte_id)
 
     def send_tracking_datas(self):
         """ send tracking data """
@@ -1009,6 +900,7 @@ class CameraDetection:
         parser.add_argument("--video", required=False, help="Path of the video training")
         parser.add_argument("--show", required=False, help="View camera screen")
         parser.add_argument("--output", required=False, help="Path to save video")
+        parser.add_argument("--step", required=False, help="Step by step")
 
         args = parser.parse_args()
 
@@ -1074,7 +966,7 @@ class CameraDetection:
             elif key:
                 self.key_press(key)
 
-            while True and key != ord('a'):
+            while args.step and key != ord('a'):
                 key = cv2.waitKey(1) & 0xFF
                 if key == ord('a'):
                     sleep_key = False
