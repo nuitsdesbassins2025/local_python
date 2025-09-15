@@ -221,7 +221,7 @@ class CameraDetection:
         # cap.set(cv2.CAP_PROP_BACKLIGHT, 1)      # Compensation du rétroéclairage
         # cap.set(cv2.CAP_PROP_EXPOSURE, -4)      # Exposition (souvent négatif = automatique désactivé)
 
-        self.yolo_model_name = "yolo12l.pt"
+        self.yolo_model_name = "yolo12x.pt"
         self.yolo_conf = 0.1 # seuil de confiance
         self.yolo_filter_class = [0] # 0: personne, list of class to track
         self.yolo_model = None
@@ -438,6 +438,7 @@ class CameraDetection:
         self.boosttrack = BoostTrack(
             reid_weights=Path('osnet_x0_25_msmt17.pt'),  # chemin vers ton modèle ReID
             det_thresh=0.5,
+            min_hits=1,
             device=device,
             half=torch.cuda.is_available()  # utilise half precision si tu veux (True pour GPU)
         )
@@ -476,6 +477,7 @@ class CameraDetection:
         self.ocsort = OcSort(
             det_thresh=0.25,
             inertia=0.3,
+            min_hits=1,
         )
 
     def get_yolo_tracking(self):
@@ -545,14 +547,14 @@ class CameraDetection:
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
 
         for bd in self.tracking_detection:
-            label = f'{bd.tracking_id}: {bd.track_id}-{bd.track_boost_id}-{bd.track_byte_id}-{bd.track_ocsort_id}-{bd.state}-{bd.conf}'
+            label = f'{bd.tracking_id}: {bd.track_id}.{bd.track_boost_id}.{bd.track_byte_id}.{bd.track_ocsort_id}.{bd.state}'
             color = green_color
             if bd.state == 'lost':
-                label += f': {bd.lost_frame}'
+                label += f':{bd.lost_frame}'
                 color = blue_color
             if bd.state == 'new':
                 color = red_color
-
+            label += f'-{int(100.0 * bd.conf)}%'
             cv2.rectangle(frame, (bd.x1, bd.y1), (bd.x2, bd.y2), color, 2)
             cv2.putText(frame, label, (bd.x1, bd.y1 - 10),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
@@ -795,9 +797,6 @@ class CameraDetection:
 
 
         history_track = self.get_history_track()
-        print('-----history_track-------', history_track)
-
-
         update_tracking_detection = []
         box_detection_ok = []
 
@@ -844,6 +843,8 @@ class CameraDetection:
                     score_max = max(list(score_proximity.keys()))
                     if score_max >= self.tracking_seuil:
                         tracking_detection.state = 'ok'
+                        if self.lost_frame_max < tracking_detection.lost_frame:
+                            self.lost_frame_max = tracking_detection.lost_frame
                         tracking_detection.lost_frame = 0
                         tracking_detection.update_by_boxdetection(box_detection)
 
@@ -861,6 +862,11 @@ class CameraDetection:
                 tracking_detection.state = 'new'
                 tracking_detection.update_by_boxdetection(box_detection)
                 self.tracking_detection.append(tracking_detection)
+
+        # Delete old box_detection
+        for tracking_detection in self.tracking_detection:
+            if tracking_detection.lost_frame > int(2 * self.lost_frame_max):
+                self.tracking_detection.remove(tracking_detection)
 
 
     def send_tracking_datas(self):
