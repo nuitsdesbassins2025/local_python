@@ -51,11 +51,16 @@ class TrackingDetection:
         self.mean_h = []
         self.mean_center = []
         self.center_pred = (0, 0)
+        self.x1_pred = 0
+        self.y1_pred = 0
+        self.x2_pred = 0
+        self.y2_pred = 0
 
         self.x1_ok = 0
         self.y1_ok = 0
         self.x2_ok = 0
         self.y2_ok = 0
+
         self.occluded_by_box = []
         self.show_last_position = []
         self.label = 'new'
@@ -95,6 +100,10 @@ class TrackingDetection:
             points = self.mean_center
             velocities= []
             # Calcul des vitesses entre points successifs
+            k_ok = 1
+            if self.state == 'lost':
+                k_ok = 0.75
+
             for i in range(3):
                 velocities.append((points[-(i + 1)][0] - points[-(i + 2)][0], points[-(i + 1)][1] - points[-(i + 2)][1]))
 
@@ -106,14 +115,40 @@ class TrackingDetection:
                     avg_vx += v[0]
                     avg_vy += v[1]
 
-                    avg_vx = int(avg_vx / len(velocities))
-                    avg_vy = int(avg_vy / len(velocities))
+                    avg_vx = int(k_ok * avg_vx / len(velocities))
+                    avg_vy = int(k_ok * avg_vy / len(velocities))
 
                 # Dernier point connu
                 last_x, last_y = points[-1]
 
                 # Prédiction du prochain point
+
+
                 self.center_pred = (last_x + avg_vx, last_y + avg_vy)
+                mean_w = int(sum(self.mean_w) / len(self.mean_w) / 2)
+                mean_h = int(sum(self.mean_h) / len(self.mean_h) / 2)
+                self.x1_pred = last_x + avg_vx - mean_w
+                self.y1_pred = last_y + avg_vy - mean_h
+                self.x2_pred = last_x + avg_vx + mean_w
+                self.y2_pred = last_y + avg_vy + mean_h
+            else:
+                self.x1_pred = self.x1
+                self.y1_pred = self.y1
+                self.x2_pred = self.x2
+                self.y2_pred = self.y2
+
+
+    def validation_xy(self):
+        """ Last validation  xy  values """
+        self.x1_ok = self.x1_pred
+        self.y1_ok = self.y1_pred
+        self.x2_ok = self.x2_pred
+        self.y2_ok = self.y2_pred
+        if self.state == 'lost':
+            self.x1 = self.x1_pred
+            self.y1 = self.y1_pred
+            self.x2 = self.x2_pred
+            self.y2 = self.y2_pred
 
 
     def update_by_boxdetection(self, boxdetection):
@@ -122,11 +157,6 @@ class TrackingDetection:
         self.y1 = boxdetection.y1
         self.x2 = boxdetection.x2
         self.y2 = boxdetection.y2
-
-        self.x1_ok = boxdetection.x1
-        self.y1_ok = boxdetection.y1
-        self.x2_ok = boxdetection.x2
-        self.y2_ok = boxdetection.y2
 
         self.class_id = boxdetection.class_id
         self.conf = boxdetection.conf
@@ -638,6 +668,8 @@ class CameraDetection:
                 cv2.circle(frame, bd.mean_center[-1], 5, (0,0,0), 2)
             if bd.center_pred:
                 cv2.circle(frame, bd.center_pred, 8, (255, 255, 255), 2)
+            if bd.x1_pred and bd.y1_pred and bd.x2_pred and bd.y2_pred:
+                cv2.rectangle(frame, (bd.x1_pred, bd.y1_pred), (bd.x2_pred, bd.y2_pred), (255, 255, 255), 2)
 
         # Show no tracking box
         for bd_void in self.box_detection:
@@ -694,8 +726,8 @@ class CameraDetection:
         """ update the x and y value of box tracking """
         for box_tracking in self.tracking_detection:
             box_result = []
-            xp = float((0.5 * (box_tracking.x2 - box_tracking.x1)) + box_tracking.x1)
-            yp = float(box_tracking.y2)
+            xp = float((0.5 * (box_tracking.x2_ok - box_tracking.x1_ok)) + box_tracking.x1_ok)
+            yp = float(box_tracking.y2_ok)
 
             for zone_detection in self.zone_detection:
                 Lx1 = float(zone_detection.pt2[0] - zone_detection.pt1[0])
@@ -928,6 +960,8 @@ class CameraDetection:
         self.upadte_mean_h_w()
         for tracking_detection in self.tracking_detection:
             tracking_detection.predict_next_point()
+            tracking_detection.validation_xy()
+
         self.update_xy_tracking()
 
     def update_statistic(self):
