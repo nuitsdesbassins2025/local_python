@@ -5,7 +5,7 @@ model: yolo12x.pt
 # --- Paramètres généraux ---
 track_high_thresh: 0.2  # score minimal pour associer une détection existante
 track_low_thresh: 0.1
-new_track_thresh: 0.35
+new_track_thresh: 0.5
 match_thresh: 0.9
 track_buffer: 30
 frame_rate: 10

@@ -67,12 +67,14 @@ class TrackingDetection:
         self.track_byte_ids = []
         self.track_ocsort_ids = []
 
+        self.tracker_fields = []
         self.not_track_ids = []
         self.not_track_boost_ids = []
         self.not_track_byte_ids = []
         self.not_track_ocsort_ids = []
 
         self.tracking_ok = 0
+        self.tracking_ko = 0
 
         self.tracking_id = 0
         self.related_client_id = ''
@@ -97,7 +99,7 @@ class TrackingDetection:
         self.class_id = boxdetection.class_id
         self.conf = boxdetection.conf
 
-        for field_track in ['track_id', 'track_boost_id', 'track_byte_id', 'track_ocsort_id']:
+        for field_track in self.tracker_fields:
             tracker_id = getattr(self, field_track, 0)
             not_tracker_ids = getattr(self, 'not_' + field_track + 's', 0)
             tracker_boxdetection_id = getattr(boxdetection, field_track, 0)
@@ -200,14 +202,15 @@ class CameraDetection:
     def __init__(self):
         self.camera_usb_number = None
         self.camera = None
-        self.camera_width = 1280
-        self.camera_height = 800
+        self.camera_width = 800
+        self.camera_height = 600
         self.camera_fps = []
         self.camera_frame = None
         self.camera_frame_previews = None
         self.frame = None
 
         # resolution: 1280 800 FPS: 11
+        # resolution: 800 600 FPS: 20
         # resolution: 640 480: FPS: 33
         # resolution: 320 240 FPS: 200
 
@@ -230,6 +233,7 @@ class CameraDetection:
         self.boosttrack = None
         self.bytetrack = None
         self.ocsort = None
+        self.tracker_fields = ['track_id', 'track_boost_id', 'track_byte_id', 'track_ocsort_id']
         self.zone_detection = []
         self.box_detection = []
         self.tracking_detection = []
@@ -238,6 +242,10 @@ class CameraDetection:
         self.tracking_index = 0
         self.last_position_max = 5
         self.sending_url = 'http://localhost:8000/camera/detection'
+
+        self.stat_ok = [0,] * len(self.tracker_fields)
+        self.stat_lost = [0,] * len(self.tracker_fields)
+        self.stat_new = [0,] * len(self.tracker_fields)
 
         self.time_start = None
         self.time_mean = []
@@ -550,6 +558,13 @@ class CameraDetection:
         cv2.putText(frame, label_fps, (10, 10),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
 
+        cv2.putText(frame, f'ok   : {self.stat_ok}', (10, 27),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+        cv2.putText(frame, f'lost  : {self.stat_lost}', (10, 44),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+        cv2.putText(frame, f'new  : {self.stat_new}', (10, 61),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+
         for bd in self.tracking_detection:
             label = f'{bd.tracking_id}: {bd.track_id}.{bd.track_boost_id}.{bd.track_byte_id}.{bd.track_ocsort_id}.{bd.state}'
             color = green_color
@@ -562,8 +577,12 @@ class CameraDetection:
             cv2.rectangle(frame, (bd.x1, bd.y1), (bd.x2, bd.y2), color, 2)
             cv2.putText(frame, label, (bd.x1, bd.y1 - 10),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+
             cv2.putText(frame, f' {bd.tracking_ok}', (bd.x1, bd.y1 + 15),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, green_color, 2)
+            cv2.putText(frame, f' {bd.tracking_ko}', (bd.x1, bd.y1 + 30),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, blue_color, 2)
+
 
             xp = int(0.5 * (bd.x2 - bd.x1)) + bd.x1
             yp = bd.y2
@@ -750,7 +769,7 @@ class CameraDetection:
         history_track = self.get_history_track()
 
         for tracking_detection in self.tracking_detection:
-            for field_track in ['track_id', 'track_boost_id', 'track_byte_id', 'track_ocsort_id']:
+            for field_track in self.tracker_fields:
                 track_id = getattr(tracking_detection, field_track, 0)
                 if not track_id:
                     continue
@@ -762,7 +781,7 @@ class CameraDetection:
                             not_track_ids.append(track_id)
 
         for tracking_detection in self.tracking_detection:
-            for field_track in ['track_id', 'track_boost_id', 'track_byte_id', 'track_ocsort_id']:
+            for field_track in self.tracker_fields:
                 track_id = getattr(tracking_detection, field_track, 0)
                 track_ids = getattr(tracking_detection, field_track + 's', [])
                 not_track_ids = getattr(tracking_detection, 'not_' + field_track + 's', [])
@@ -780,11 +799,11 @@ class CameraDetection:
     def get_history_track(self):
         """ return a dic with """
         res = {}
-        for field_track in ['track_id', 'track_boost_id', 'track_byte_id', 'track_ocsort_id']:
+        for field_track in self.tracker_fields:
             res[field_track] = {}
 
         for tracking_detection in self.tracking_detection:
-            for field_track in ['track_id', 'track_boost_id', 'track_byte_id', 'track_ocsort_id']:
+            for field_track in self.tracker_fields:
                 for tracking_history in getattr(tracking_detection, field_track + 's', []):
                     if tracking_history not in list(res[field_track].keys()):
                         res[field_track][tracking_history] = tracking_detection
@@ -811,7 +830,7 @@ class CameraDetection:
 
         for box_detection in self.box_detection:
             tracking_ids = []
-            for field_track in ['track_id', 'track_boost_id', 'track_byte_id', 'track_ocsort_id']:
+            for field_track in self.tracker_fields:
                 tracker_id = getattr(box_detection, field_track, 0)
                 if tracker_id in list(history_track[field_track].keys()):
                     tracking_ids.append(history_track[field_track][tracker_id])
@@ -819,7 +838,7 @@ class CameraDetection:
             counter = Counter(tracking_ids)
             if counter:
                 most_box_tracking, count = counter.most_common(1)[0]
-                for field_track in ['track_id', 'track_boost_id', 'track_byte_id', 'track_ocsort_id']:
+                for field_track in self.tracker_fields:
                     tracker_id = getattr(box_detection, field_track, 0)
                     if tracker_id in list(history_track[field_track].keys()) and history_track[field_track][tracker_id] != most_box_tracking:
                         setattr(box_detection, field_track, 0)
@@ -835,6 +854,7 @@ class CameraDetection:
             if tracking_detection.state == 'tracking':
                 tracking_detection.state = 'lost'
                 tracking_detection.lost_frame += 1
+                tracking_detection.tracking_ko += 1
 
                 # --------- Check new box_detection
                 score_proximity = {}
@@ -862,11 +882,12 @@ class CameraDetection:
             # Check if some lost tracking_detection is corresponding
             if box_detection in box_detection_ok:
                 continue
-            elif box_detection.track_id or box_detection.track_byte_id or box_detection.track_boost_id:
+            elif box_detection.track_id:
                 # New
                 tracking_detection = TrackingDetection()
                 tracking_detection.tracking_id = self.get_new_tracking_index()
                 tracking_detection.state = 'new'
+                tracking_detection.tracker_fields = self.tracker_fields
                 tracking_detection.update_by_boxdetection(box_detection)
                 self.tracking_detection.append(tracking_detection)
 
@@ -875,6 +896,14 @@ class CameraDetection:
             if tracking_detection.lost_frame > int(2 * self.lost_frame_max):
                 self.tracking_detection.remove(tracking_detection)
 
+        # statistic
+        for tracking_detection in self.tracking_detection:
+            if tracking_detection.state in ['ok', 'lost', 'new']:
+                statistic = getattr(self, 'stat_' + tracking_detection.state)
+                for i, field_track in enumerate(self.tracker_fields):
+                    if getattr(tracking_detection, field_track):
+                        statistic[i] += 1
+                setattr(self, 'stat_' + tracking_detection.state, statistic)
 
     def send_tracking_datas(self):
         """ send tracking data """
