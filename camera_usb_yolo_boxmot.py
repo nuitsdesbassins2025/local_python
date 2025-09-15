@@ -46,8 +46,12 @@ class TrackingDetection:
         self.y1 = 0
         self.x2 = 0
         self.y2 = 0
+
         self.mean_w = []
-        self.mean_y = []
+        self.mean_h = []
+        self.mean_center = []
+        self.center_pred = (0, 0)
+
         self.x1_ok = 0
         self.y1_ok = 0
         self.x2_ok = 0
@@ -83,6 +87,34 @@ class TrackingDetection:
         self.state = 'new'
         self.conf = 0
         self.tracker = None
+
+    def predict_next_point(self):
+        """ estimation of next point """
+
+        if len(self.mean_center) > 3:
+            points = self.mean_center
+            velocities= []
+            # Calcul des vitesses entre points successifs
+            for i in range(3):
+                velocities.append((points[-(i + 1)][0] - points[-(i + 2)][0], points[-(i + 1)][1] - points[-(i + 2)][1]))
+
+            if velocities:
+                # Moyenne des vitesses
+                avg_vx = 0
+                avg_vy = 0
+                for v in velocities:
+                    avg_vx += v[0]
+                    avg_vy += v[1]
+
+                    avg_vx = int(avg_vx / len(velocities))
+                    avg_vy = int(avg_vy / len(velocities))
+
+                # Dernier point connu
+                last_x, last_y = points[-1]
+
+                # Prédiction du prochain point
+                self.center_pred = (last_x + avg_vx, last_y + avg_vy)
+
 
     def update_by_boxdetection(self, boxdetection):
         """ update value """
@@ -238,7 +270,7 @@ class CameraDetection:
         self.box_detection = []
         self.tracking_detection = []
         self.tracking_seuil = 0.5 # surface minimum to link a lost box detection
-        self.lost_frame_max = 30
+        self.lost_frame_max = 20
         self.tracking_index = 0
         self.last_position_max = 5
         self.sending_url = 'http://localhost:8000/camera/detection'
@@ -600,10 +632,18 @@ class CameraDetection:
                 ry = int(bd.zone_xy[0][1] * 100.0)
                 cv2.putText(frame, f"x: {rx} y: {ry}", (xp, yp + 10),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, red_color, 2)
+
+            # Show mean position
+            if bd.mean_center:
+                cv2.circle(frame, bd.mean_center[-1], 5, (0,0,0), 2)
+            if bd.center_pred:
+                cv2.circle(frame, bd.center_pred, 8, (255, 255, 255), 2)
+
+        # Show no tracking box
         for bd_void in self.box_detection:
             if not (bd_void.track_id and bd_void.track_boost_id and bd_void.track_byte_id):
                 color = (0, 0, 0)
-                cv2.rectangle(frame, (bd_void.x1, bd_void.y1), (bd_void.x2, bd_void.y2), color, 1)
+                cv2.rectangle(frame, (bd_void.x1, bd_void.y1), (bd_void.x2, bd_void.y2), (255,255,255), 1)
 
         return frame
 
@@ -635,38 +675,20 @@ class CameraDetection:
                 new_plot = (zone_plots[self.key_plot][0] + x, zone_plots[self.key_plot][1] + y)
                 self.put_zone_plot(self.key_plot, new_plot)
 
-    def get_box_detection_xy(self):
-        """ compute xy in zone detection """
-        box_detections = self.box_detection.copy()
-        result = []
+    def upadte_mean_h_w(self):
+        """ Update the value of mean h and w """
+        for box_tracking in self.tracking_detection:
 
-        for box_detection in box_detections:
-            box_result = []
-            xp = float((0.5 * (box_detection.x2 - box_detection.x1)) + box_detection.x1)
-            yp = float(box_detection.y2)
+            box_tracking.mean_h.append(box_tracking.y2 - box_tracking.y1)
+            box_tracking.mean_w.append(box_tracking.x2 - box_tracking.x1)
+            box_tracking.mean_center.append((
+                box_tracking.x1 + int((box_tracking.x2 - box_tracking.x1) / 2),
+                box_tracking.y1 + int((box_tracking.y2 - box_tracking.y1) / 2)
+                ))
 
-            for zone_detection in self.zone_detection:
-
-                Lx1 = float(zone_detection.pt2[0] - zone_detection.pt1[0])
-                Lx2 = float(zone_detection.pt3[0] - zone_detection.pt4[0])
-                Rx1 = (xp - zone_detection.pt1[0]) / Lx1
-                Rx2 = (xp - zone_detection.pt4[0]) / Lx2
-                Rx = 0.5 * (Rx1 + Rx2)
-
-                Ly1 = zone_detection.pt4[1] - zone_detection.pt1[1]
-                Ly2 = zone_detection.pt3[1] - zone_detection.pt2[1]
-                Ry1 = (yp - zone_detection.pt1[1]) / Ly1
-                Ry2 = (yp - zone_detection.pt2[1]) / Ly2
-                Ry = 0.5 * (Ry1 + Ry2)
-
-                x = (1.0 - Ry) * Rx1 + Ry * Rx2
-                y = (1.0 - Rx) * Ry1 + Rx * Ry2
-                box_result.append((x, y))
-
-            box_detection.zone_xy = box_result
-            result.append(box_detection)
-
-        return result
+            for list_max in [box_tracking.mean_h, box_tracking.mean_w, box_tracking.mean_center]:
+                if len(list_max) > 5:
+                    del(list_max[0])
 
     def update_xy_tracking(self):
         """ update the x and y value of box tracking """
@@ -779,6 +801,8 @@ class CameraDetection:
                     if other_tracking_detection != tracking_detection:
                         if track_id not in not_track_ids:
                             not_track_ids.append(track_id)
+                        if track_id in getattr(other_tracking_detection, field_track + 's'):
+                            getattr(other_tracking_detection, field_track + 's').remove(track_id)
 
         for tracking_detection in self.tracking_detection:
             for field_track in self.tracker_fields:
@@ -813,7 +837,7 @@ class CameraDetection:
 
     def compute_tracking2(self):
         """ compute new tracking with box_detection """
-        self.update_tracking_detection_occluded()
+
         self.compute_tracker()
 
         tracking_detection_old = self.tracking_detection.copy()
@@ -897,13 +921,41 @@ class CameraDetection:
                 self.tracking_detection.remove(tracking_detection)
 
         # statistic
+        self.update_statistic()
+
+        # Update XY
+        self.update_tracking_detection_occluded()
+        self.upadte_mean_h_w()
         for tracking_detection in self.tracking_detection:
-            if tracking_detection.state in ['ok', 'lost', 'new']:
-                statistic = getattr(self, 'stat_' + tracking_detection.state)
+            tracking_detection.predict_next_point()
+        self.update_xy_tracking()
+
+    def update_statistic(self):
+        """ update statistic of tracker """
+        for tracking_detection in self.tracking_detection:
+            if tracking_detection.state == 'ok':
+                statistic_ok = self.stat_ok.copy()
+                statistic_lost = self.stat_lost.copy()
                 for i, field_track in enumerate(self.tracker_fields):
                     if getattr(tracking_detection, field_track):
-                        statistic[i] += 1
-                setattr(self, 'stat_' + tracking_detection.state, statistic)
+                        statistic_ok[i] += 1
+                    else:
+                        statistic_lost[i] += 1
+                self.stat_ok = statistic_ok
+                self.stat_lost = statistic_lost
+
+            if tracking_detection.state == 'new':
+                statistic_new = self.stat_new.copy()
+                for i, field_track in enumerate(self.tracker_fields):
+                    if getattr(tracking_detection, field_track):
+                        statistic_new[i] += 1
+                self.stat_new = statistic_new
+
+            if tracking_detection.state == 'lost':
+                statistic_lost = self.stat_lost.copy()
+                for i, field_track in enumerate(self.tracker_fields):
+                    statistic_lost[i] += 1
+                self.stat_lost = statistic_lost
 
     def send_tracking_datas(self):
         """ send tracking data """
