@@ -1064,8 +1064,8 @@ class CameraDetection:
                 tracking_datas.append({
                     "tracking_id": int(tracking_detection.tracking_id),
                     "related_client_id": tracking_detection.related_client_id,
-                    "posX": int(100.0 * tracking_detection.x),
-                    "posY": int(100.0 * tracking_detection.y),
+                    "posX": int(tracking_detection.x),
+                    "posY": int(tracking_detection.y),
                     "state": tracking_detection.state,
                     "lost_frame": tracking_detection.lost_frame,
                     "zone": "game",
