@@ -140,15 +140,24 @@ class TrackingDetection:
 
     def validation_xy(self):
         """ Last validation  xy  values """
-        self.x1_ok = self.x1_pred
-        self.y1_ok = self.y1_pred
-        self.x2_ok = self.x2_pred
-        self.y2_ok = self.y2_pred
-        if self.state == 'lost':
-            self.x1 = self.x1_pred
-            self.y1 = self.y1_pred
-            self.x2 = self.x2_pred
-            self.y2 = self.y2_pred
+        if len(self.mean_center) >= 3:
+            self.x1_ok = self.x1_pred
+            self.y1_ok = self.y1_pred
+            self.x2_ok = self.x2_pred
+            self.y2_ok = self.y2_pred
+
+            if self.state == 'lost':
+                self.x1 = self.x1_pred
+                self.y1 = self.y1_pred
+                self.x2 = self.x2_pred
+                self.y2 = self.y2_pred
+        else:
+            self.x1_ok = self.x1
+            self.y1_ok = self.y1
+            self.x2_ok = self.x2
+            self.y2_ok = self.y2
+
+
 
 
     def update_by_boxdetection(self, boxdetection):
@@ -252,11 +261,66 @@ class ZoneDetection:
         self.pt4 = (100, 400)  # Bas-gauche
         self.color = red_color
 
+        self.H = None #  homography matrix
+        self.H_inv = None # inverse homography matrix
+
+    def update_h(self):
+        """ compute homography matrix """
+        # Points dans l'image
+        pts_image = np.array([
+            [self.pt4[0], self.pt4[1]],  # coin grille bas gauche
+            [self.pt3[0], self.pt3[1]],  # coin grille bas droite
+            [self.pt2[0], self.pt2[1]],  # coin grille haut droite
+            [self.pt1[0], self.pt1[1]],  # coin grille haut gauche
+        ], dtype=np.float32)
+
+        # Points au sol
+        pts_world = np.array([
+            [0, 100],
+            [100, 100],
+            [100, 0],
+            [0, 0],
+        ], dtype=np.float32)
+
+        # Calculer homographie
+        self.H = cv2.getPerspectiveTransform(pts_image, pts_world)
+        self.H_inv = np.linalg.inv(self.H)
+
+    def image_to_ground(self, u, v):
+        """ return x, y with homogrphy [(0,0), (100,100)] """
+        if self.H is None:
+            self.update_h()
+        pt = np.array([[[u, v]]], dtype=np.float32)
+        pt_transformed = cv2.perspectiveTransform(pt, self.H)
+        return pt_transformed[0][0]
+
+    def ground_to_image(self, X, Y):
+        """
+        Convertit une position au sol (X, Y) en mètres → en coordonnées image (u, v) en pixels
+        """
+        if self.H_inv is None:
+            self.update_h()
+        pt_world = np.array([[[X, Y]]], dtype=np.float32)  # forme (1, 1, 2)
+        pt_image = cv2.perspectiveTransform(pt_world, self.H_inv)
+        u, v = pt_image[0][0]
+        return (int(u), int(v))
+
     def show_zone_detection(self, frame):
         """ Add polyline on frame """
         trapeze_pts = np.array([self.pt1, self.pt2, self.pt3, self.pt4], dtype=np.int32)
         trapeze_pts = trapeze_pts.reshape((-1, 1, 2))
         cv2.polylines(frame, [trapeze_pts], isClosed=True, color=self.color, thickness=2)
+
+        for y in [25, 50, 75]:
+            pt_0_y = self.ground_to_image(0, y)
+            pt_100_y = self.ground_to_image(100, y)
+            cv2.line(frame, pt_0_y, pt_100_y, self.color, thickness=2)
+
+        for x in [25, 50, 75]:
+            pt_x_0 = self.ground_to_image(x, 0)
+            pt_x_100 = self.ground_to_image(x, 100)
+            cv2.line(frame, pt_x_0, pt_x_100, self.color, thickness=2)
+
         return frame
 
 
@@ -657,11 +721,8 @@ class CameraDetection:
             if len(bd.show_last_position) > self.last_position_max:
                 del(bd.show_last_position[0])
 
-            if bd.zone_xy:
-                rx = int(bd.zone_xy[0][0] * 100.0)
-                ry = int(bd.zone_xy[0][1] * 100.0)
-                cv2.putText(frame, f"x: {rx} y: {ry}", (xp, yp + 10),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, red_color, 2)
+            cv2.putText(frame, f"x: {bd.x} y: {bd.y}", (xp, yp + 10),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, red_color, 2)
 
             # Show mean position
             if bd.mean_center:
@@ -706,6 +767,8 @@ class CameraDetection:
                 zone_plots = self.get_zone_plot()
                 new_plot = (zone_plots[self.key_plot][0] + x, zone_plots[self.key_plot][1] + y)
                 self.put_zone_plot(self.key_plot, new_plot)
+                for zone in self.zone_detection:
+                    zone.update_h()
 
     def upadte_mean_h_w(self):
         """ Update the value of mean h and w """
@@ -725,28 +788,18 @@ class CameraDetection:
     def update_xy_tracking(self):
         """ update the x and y value of box tracking """
         for box_tracking in self.tracking_detection:
-            box_result = []
+
             xp = float((0.5 * (box_tracking.x2_ok - box_tracking.x1_ok)) + box_tracking.x1_ok)
             yp = float(box_tracking.y2_ok)
 
+            zone_result = []
+
             for zone_detection in self.zone_detection:
-                Lx1 = float(zone_detection.pt2[0] - zone_detection.pt1[0])
-                Lx2 = float(zone_detection.pt3[0] - zone_detection.pt4[0])
-                Rx1 = (xp - zone_detection.pt1[0]) / Lx1
-                Rx2 = (xp - zone_detection.pt4[0]) / Lx2
-                Rx = 0.5 * (Rx1 + Rx2)
+                x, y = zone_detection.image_to_ground(xp, yp)
+                zone_result.append((int(x), int(y)))
 
-                Ly1 = zone_detection.pt4[1] - zone_detection.pt1[1]
-                Ly2 = zone_detection.pt3[1] - zone_detection.pt2[1]
-                Ry1 = (yp - zone_detection.pt1[1]) / Ly1
-                Ry2 = (yp - zone_detection.pt2[1]) / Ly2
-                Ry = 0.5 * (Ry1 + Ry2)
+            box_tracking.zone_xy = zone_result
 
-                x = (1.0 - Ry) * Rx1 + Ry * Rx2
-                y = (1.0 - Rx) * Ry1 + Rx * Ry2
-                box_result.append((x, y))
-
-            box_tracking.zone_xy = box_result
             if box_tracking.zone_xy:
                 box_tracking.x = box_tracking.zone_xy[0][0]
                 box_tracking.y = box_tracking.zone_xy[0][1]
@@ -772,7 +825,6 @@ class CameraDetection:
 
         for tracking_detection in self.tracking_detection:
             tracking_detection.occluded_by_box = result[tracking_detection.tracking_id]
-
 
     def get_new_tracking_index(self):
         """ return next tracking index """
@@ -1073,8 +1125,9 @@ class CameraDetection:
 
                 # Dessiner les boîtes sur l'image originale
                 frame = self.camera_frame
-                frame = self.show_tracking(frame)
                 frame = self.show_zone_detection(frame)
+                frame = self.show_tracking(frame)
+
 
                 if frame is not None:
                     cv2.imshow("Camera USB", frame)
