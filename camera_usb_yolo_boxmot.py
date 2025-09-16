@@ -416,8 +416,9 @@ class CameraDetection:
             self.detect_camera()
 
         self.camera = cv2.VideoCapture(self.camera_usb_number)
+        # (640, 480), (1280, 800), (1920, 1080), (2560, 1440),
 
-        resolutions = [(800, 600), (1280, 800), (1280, 720)]
+        resolutions = [(640, 480), (800, 600), (1280, 720), (1280, 800)]
         for (w, h) in resolutions:
             self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, w)
             self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, h)
@@ -431,6 +432,7 @@ class CameraDetection:
         self.thread = threading.Thread(target=self.update, daemon=True)
         self.running = True
         self.thread.start()
+        time.sleep(0.5)
 
     def get_camera_frame(self):
 
@@ -496,14 +498,22 @@ class CameraDetection:
     def track_fps(self, nb_time=10):
         """ track FPS """
         time_start = time.time()
+        camera_fps = self.camera_fps
+        if camera_fps:
+            camera_time = (camera_fps[-1] - camera_fps[0]) / len(camera_fps)
+        else:
+            camera_time = 1.0
+
         if self.time_start is not None:
             time_mean = time_start - self.time_start
             self.time_mean.append(time_mean)
+            self.time_fps = "1"
 
         if len(self.time_mean) > nb_time:
             del(self.time_mean[0])
-            fps = int(1.0 / (sum(self.time_mean) / len(self.time_mean)))
-            self.time_fps = f"{int(fps)}"
+            pose_time =  sum(self.time_mean) / len(self.time_mean)
+            fps = int(1.0 / pose_time)
+            self.time_fps = f"{int(fps)}: Cam: {int(100 * camera_time)} ms, Pos: {int(100 * pose_time)} ms"
         self.time_start = time_start
 
     def load_zone_detection(self):
