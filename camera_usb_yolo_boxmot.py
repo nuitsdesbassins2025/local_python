@@ -416,8 +416,9 @@ class CameraDetection:
             self.detect_camera()
 
         self.camera = cv2.VideoCapture(self.camera_usb_number)
+        # (640, 480), (1280, 800), (1920, 1080), (2560, 1440)
 
-        resolutions = [(800, 600), (1280, 800), (1280, 720)]
+        resolutions = [(2560, 1440), (1920, 1080), (800, 600), (1280, 800), (1280, 720)]
         for (w, h) in resolutions:
             self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, w)
             self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, h)
@@ -431,6 +432,7 @@ class CameraDetection:
         self.thread = threading.Thread(target=self.update, daemon=True)
         self.running = True
         self.thread.start()
+        time.sleep(0.5)
 
     def get_camera_frame(self):
 
@@ -499,6 +501,7 @@ class CameraDetection:
         if self.time_start is not None:
             time_mean = time_start - self.time_start
             self.time_mean.append(time_mean)
+            self.time_fps = "1"
 
         if len(self.time_mean) > nb_time:
             del(self.time_mean[0])
