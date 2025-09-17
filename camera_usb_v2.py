@@ -42,6 +42,8 @@ class TrackingDetection:
         self.x = 0
         self.y = 0
         self.last_position = []
+        self.last_position_max = 5
+
         self.x1 = 0
         self.y1 = 0
         self.x2 = 0
@@ -51,6 +53,10 @@ class TrackingDetection:
         self.mean_h = []
         self.mean_center = []
         self.center_pred = (0, 0)
+
+        self.x_pred = 0
+        self.y_pred = 0
+
         self.x1_pred = 0
         self.y1_pred = 0
         self.x2_pred = 0
@@ -96,69 +102,41 @@ class TrackingDetection:
     def predict_next_point(self):
         """ estimation of next point """
 
-        if len(self.mean_center) > 3:
-            points = self.mean_center
-            velocities= []
+        if len(self.last_position) >= self.last_position_max:
+            points = self.last_position
+            vx = []
+            vy = []
             # Calcul des vitesses entre points successifs
-            k_ok = 1
-            if self.state == 'lost':
-                k_ok = 0.75
+            for i in range(self.last_position_max - 1):
+                vx.append(points[-(i + 1)][0] - points[-(i + 2)][0])
+                vy.append(points[-(i + 1)][1] - points[-(i + 2)][1])
 
-            for i in range(3):
-                velocities.append((points[-(i + 1)][0] - points[-(i + 2)][0], points[-(i + 1)][1] - points[-(i + 2)][1]))
+            if vx and vy:
+                # Moyenne des 2 dernieres vitesses
+                avg_vx2 = sum(vx[:2]) / 2
+                avg_vy2 = sum(vy[:2]) / 2
 
-            if velocities:
-                # Moyenne des vitesses
-                avg_vx = 0
-                avg_vy = 0
-                for v in velocities:
-                    avg_vx += v[0]
-                    avg_vy += v[1]
-
-                    avg_vx = int(k_ok * avg_vx / len(velocities))
-                    avg_vy = int(k_ok * avg_vy / len(velocities))
+                # Limitation if tracking lost
+                if self.state == 'lost':
+                    avg_vx2 = 0.75 * avg_vx2
+                    avg_vy2 = 0.75 * avg_vy2
 
                 # Dernier point connu
                 last_x, last_y = points[-1]
 
                 # Prédiction du prochain point
-
-
-                self.center_pred = (last_x + avg_vx, last_y + avg_vy)
-                mean_w = int(sum(self.mean_w) / len(self.mean_w) / 2)
-                mean_h = int(sum(self.mean_h) / len(self.mean_h) / 2)
-                self.x1_pred = last_x + avg_vx - mean_w
-                self.y1_pred = last_y + avg_vy - mean_h
-                self.x2_pred = last_x + avg_vx + mean_w
-                self.y2_pred = last_y + avg_vy + mean_h
+                self.x_pred = last_x + avg_vx2
+                self.y_pred = last_y + avg_vy2
             else:
-                self.x1_pred = self.x1
-                self.y1_pred = self.y1
-                self.x2_pred = self.x2
-                self.y2_pred = self.y2
-
+                self.x_pred = self.x
+                self.y_pred = self.y
+        else:
+            self.x_pred = self.x
+            self.y_pred = self.y
 
     def validation_xy(self):
         """ Last validation  xy  values """
-        if len(self.mean_center) >= 3:
-            self.x1_ok = self.x1_pred
-            self.y1_ok = self.y1_pred
-            self.x2_ok = self.x2_pred
-            self.y2_ok = self.y2_pred
-
-            if self.state == 'lost':
-                self.x1 = self.x1_pred
-                self.y1 = self.y1_pred
-                self.x2 = self.x2_pred
-                self.y2 = self.y2_pred
-        else:
-            self.x1_ok = self.x1
-            self.y1_ok = self.y1
-            self.x2_ok = self.x2
-            self.y2_ok = self.y2
-
-
-
+        pass
 
     def update_by_boxdetection(self, boxdetection):
         """ update value """
@@ -190,7 +168,6 @@ class TrackingDetection:
             return 0.0  # pas d'intersection
 
         return (xB - xA) * (yB - yA)
-
 
     def get_bbox(self):
         """ return bbox """
@@ -253,37 +230,25 @@ class TrackingDetection:
 
 class ZoneDetection:
     def __init__(self):
-        """ playing zone """
-        # Définir les 4 points du trapèze zone de jeux (x, y)
-        self.pt1 = (200, 100)  # Haut-gauche
-        self.pt2 = (600, 100)  # Haut-droit
-        self.pt3 = (700, 400)  # Bas-droit
-        self.pt4 = (100, 400)  # Bas-gauche
-        self.color = red_color
+        """ playing zone
+        plot matix exemple
+        [
+        (200, 100)  # Haut-gauche
+        (600, 100)  # Haut-droit
+        (700, 400)  # Bas-droit
+        (100, 400)  # Bas-gauche
+        ]
+
+        """
+        self.pts_ground = []
+        self.pts_image = []
 
         self.H = None #  homography matrix
         self.H_inv = None # inverse homography matrix
 
     def update_h(self):
         """ compute homography matrix """
-        # Points dans l'image
-        pts_image = np.array([
-            [self.pt4[0], self.pt4[1]],  # coin grille bas gauche
-            [self.pt3[0], self.pt3[1]],  # coin grille bas droite
-            [self.pt2[0], self.pt2[1]],  # coin grille haut droite
-            [self.pt1[0], self.pt1[1]],  # coin grille haut gauche
-        ], dtype=np.float32)
-
-        # Points au sol
-        pts_world = np.array([
-            [0, 100],
-            [100, 100],
-            [100, 0],
-            [0, 0],
-        ], dtype=np.float32)
-
-        # Calculer homographie
-        self.H = cv2.getPerspectiveTransform(pts_image, pts_world)
+        self.H = cv2.getPerspectiveTransform(self.pts_image, self.pts_ground)
         self.H_inv = np.linalg.inv(self.H)
 
     def image_to_ground(self, u, v):
@@ -300,28 +265,28 @@ class ZoneDetection:
         """
         if self.H_inv is None:
             self.update_h()
-        pt_world = np.array([[[X, Y]]], dtype=np.float32)  # forme (1, 1, 2)
-        pt_image = cv2.perspectiveTransform(pt_world, self.H_inv)
+        pt_ground = np.array([[[X, Y]]], dtype=np.float32)  # forme (1, 1, 2)
+        pt_image = cv2.perspectiveTransform(pt_ground, self.H_inv)
         u, v = pt_image[0][0]
         return (int(u), int(v))
 
-    def show_zone_detection(self, frame):
-        """ Add polyline on frame """
-        trapeze_pts = np.array([self.pt1, self.pt2, self.pt3, self.pt4], dtype=np.int32)
-        trapeze_pts = trapeze_pts.reshape((-1, 1, 2))
-        cv2.polylines(frame, [trapeze_pts], isClosed=True, color=self.color, thickness=2)
+    def plot_in_image(self, plot):
+        """ return true if the plot is in the zone
+        plot = (x, y)
+        """
+        result = cv2.pointPolygonTest(self.pts_image, plot, False)
+        if result >= 0:
+            return True
+        return False
 
-        for y in [25, 50, 75]:
-            pt_0_y = self.ground_to_image(0, y)
-            pt_100_y = self.ground_to_image(100, y)
-            cv2.line(frame, pt_0_y, pt_100_y, self.color, thickness=2)
-
-        for x in [25, 50, 75]:
-            pt_x_0 = self.ground_to_image(x, 0)
-            pt_x_100 = self.ground_to_image(x, 100)
-            cv2.line(frame, pt_x_0, pt_x_100, self.color, thickness=2)
-
-        return frame
+    def plot_in_ground(self, plot):
+        """ return true if the plot is in the zone
+        plot = (x, y)
+        """
+        result = cv2.pointPolygonTest(self.pts_ground, plot, False)
+        if result >= 0:
+            return True
+        return False
 
 
 class CameraDetection:
@@ -384,6 +349,98 @@ class CameraDetection:
         self.running = False
         self.thread = None
 
+        self.grid_origin = (int(0.2 * self.camera_width), int(0.45 * self.camera_height))
+        self.grid_dimension = 5
+        self.grid_max_value = 1000
+
+        self.grid = []
+        self.grid_pt_selected = (0, 0)
+
+    def init_grid(self):
+        """ create starting Grid """
+        grid = []
+        x_step = int(0.5 * self.camera_width / self.grid_dimension)
+        y_step = int(0.5 * self.camera_height / self.grid_dimension)
+
+        for y in range(self.grid_dimension):
+            row =[]
+            for x in range(self.grid_dimension):
+                row.append((self.grid_origin[0] + int(x * x_step), self.grid_origin[1] + int(y * y_step)))
+            grid.append(row)
+        self.grid = grid
+        self.create_grid_zone()
+
+    def create_grid_zone(self):
+        """ split grid in zone """
+        # Parcourir chaque coin haut-gauche possible d'un bloc 2x2
+        zone_detection = []
+        max_value_world = self.grid_max_value
+        step_world = int(max_value_world / (len(self.grid) - 1))
+
+        for j in range(len(self.grid) - 1):
+            for i in range(len(self.grid) - 1):
+                # Extraire le bloc 2x2
+                pts_image = np.array([
+                    [self.grid[j+1][i][0], self.grid[j+1][i][1]],  # coin grille bas gauche
+                    [self.grid[j+1][i+1][0], self.grid[j+1][i+1][1]],  # coin grille bas droite
+                    [self.grid[j][i+1][0], self.grid[j][i+1][1]],  # coin grille haut droite
+                    [self.grid[j][i][0], self.grid[j][i][1]],  # coin grille haut gauche
+                ], dtype=np.float32)
+
+                pts_ground = np.array([
+                    [i * step_world, (j + 1) * step_world],
+                    [(i + 1) * step_world, (j + 1) * step_world],
+                    [(i + 1) * step_world, j * step_world],
+                    [i * step_world, j * step_world],
+
+                ], dtype=np.float32)
+
+                new_zone_detection = ZoneDetection()
+                new_zone_detection.pts_image = pts_image
+                new_zone_detection.pts_ground = pts_ground
+                new_zone_detection.update_h()
+                self.zone_detection.append(new_zone_detection)
+
+        # Add total zone (used for external position)
+        pts_image = np.array([
+            [self.grid[-1][0][0], self.grid[-1][0][1]],  # coin grille bas gauche
+            [self.grid[-1][-1][0], self.grid[-1][-1][1]],  # coin grille bas droite
+            [self.grid[0][-1][0], self.grid[0][-1][1]],  # coin grille haut droite
+            [self.grid[0][0][0], self.grid[0][0][1]],  # coin grille haut gauche
+        ], dtype=np.float32)
+
+        pts_ground = np.array([
+            [0, max_value_world],
+            [max_value_world, max_value_world],
+            [max_value_world, 0],
+            [0, 0],
+
+        ], dtype=np.float32)
+
+        new_zone_detection = ZoneDetection()
+        new_zone_detection.pts_image = pts_image
+        new_zone_detection.pts_ground = pts_ground
+        new_zone_detection.update_h()
+        self.zone_detection.append(new_zone_detection)
+
+    def show_grid(self, frame):
+        """ Show the grid """
+
+        for i in range(self.grid_dimension):
+            for j in range(self.grid_dimension - 1):
+                pt1 = self.grid[i][j]
+                pt2 = self.grid[i][j + 1]
+                cv2.line(frame, pt1, pt2, red_color, thickness=2)
+
+        for j in range(5):
+            for i in range(4):  # de i=0 à i=3
+                pt1 = self.grid[i][j]
+                pt2 = self.grid[i +1 ][j]
+                cv2.line(frame, pt1, pt2, red_color, thickness=2)
+
+        cv2.circle(frame, self.grid[self.grid_pt_selected[0]][self.grid_pt_selected[1]], 10, red_color, 2)
+
+        return frame
 
     def update(self):
         while self.running:
@@ -467,15 +524,8 @@ class CameraDetection:
         data = {
             "camera_width": self.camera_width,
             "camera_height": self.camera_height,
-            "zone_detection": []
+            "grid": self.grid,
         }
-        for zone_detection in self.zone_detection:
-            data["zone_detection"].append([
-                list(zone_detection.pt1),
-                list(zone_detection.pt2),
-                list(zone_detection.pt3),
-                list(zone_detection.pt4),
-                list(zone_detection.color)])
 
         with open(filepath, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=4)
@@ -485,15 +535,11 @@ class CameraDetection:
         with open(filepath, "r", encoding="utf-8") as f:
             data = json.load(f)
 
-        self.zone_detection = []
-        for zone_detection in data['zone_detection']:
-            new_zone_detection = ZoneDetection()
-            new_zone_detection.pt1 = tuple(zone_detection[0])
-            new_zone_detection.pt2 = tuple(zone_detection[1])
-            new_zone_detection.pt3 = tuple(zone_detection[2])
-            new_zone_detection.pt4 = tuple(zone_detection[3])
-            new_zone_detection.color = tuple(zone_detection[4])
-            self.zone_detection.append(new_zone_detection)
+        if data.get('grid'):
+            self.grid = data.get('grid')
+            self.create_grid_zone()
+        else:
+            self.init_grid()
 
     def track_fps(self, nb_time=10):
         """ track FPS """
@@ -515,21 +561,6 @@ class CameraDetection:
             fps = int(1.0 / pose_time)
             self.time_fps = f"{int(fps)}: Cam: {int(100 * camera_time)} ms, Pos: {int(100 * pose_time)} ms"
         self.time_start = time_start
-
-    def load_zone_detection(self):
-        """ load zone detection """
-        zone_detection = ZoneDetection()
-        self.zone_detection.append(zone_detection)
-
-    def show_zone_detection(self, frame):
-        """ add zone detection on frame """
-        for zone_detection in self.zone_detection:
-            frame = zone_detection.show_zone_detection(frame)
-
-        zone_plots = self.get_zone_plot()
-        cv2.circle(frame, zone_plots[self.key_plot], 10, red_color, 2)
-
-        return frame
 
     def init_video(self, video_path=None):
         """ Ouvre un fichier vidéo pour test """
@@ -665,29 +696,6 @@ class CameraDetection:
 
         self.box_detection = box_detection
 
-    def get_zone_plot(self):
-        """ return list of plot of zone detection """
-        zone_plots = []
-        for zone in self.zone_detection:
-            zone_plots.append(zone.pt1)
-            zone_plots.append(zone.pt2)
-            zone_plots.append(zone.pt3)
-            zone_plots.append(zone.pt4)
-        return zone_plots
-
-    def put_zone_plot(self, i_plot, plot):
-        """ Put new plot on zone plot """
-        i_zone = i_plot // 4
-        i_plot = i_plot - i_zone * 4
-        if i_plot == 0:
-            self.zone_detection[i_zone].pt1 = plot
-        elif i_plot == 1:
-            self.zone_detection[i_zone].pt2 = plot
-        elif i_plot == 2:
-            self.zone_detection[i_zone].pt3 = plot
-        elif i_plot == 3:
-            self.zone_detection[i_zone].pt4 = plot
-
     def show_tracking(self, frame):
         """ Add yolo box detection on frame """
         label_fps = f'{frame.shape} FPS: {self.time_fps}'
@@ -719,28 +727,16 @@ class CameraDetection:
             cv2.putText(frame, f' {bd.tracking_ko}', (bd.x1, bd.y1 + 30),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, blue_color, 2)
 
-
+            # Current position
             xp = int(0.5 * (bd.x2 - bd.x1)) + bd.x1
             yp = bd.y2
             cv2.circle(frame, (xp, yp), 10, red_color, 2)
-
-            for position in bd.show_last_position:
-                cv2.circle(frame, position, 3, red_color, 2)
-
-            bd.show_last_position.append((xp, yp))
-            if len(bd.show_last_position) > self.last_position_max:
-                del(bd.show_last_position[0])
-
             cv2.putText(frame, f"x: {bd.x} y: {bd.y}", (xp, yp + 10),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, red_color, 2)
 
-            # Show mean position
-            if bd.mean_center:
+            # Show prediction position
+            if False:
                 cv2.circle(frame, bd.mean_center[-1], 5, (0,0,0), 2)
-            if bd.center_pred:
-                cv2.circle(frame, bd.center_pred, 8, (255, 255, 255), 2)
-            if bd.x1_pred and bd.y1_pred and bd.x2_pred and bd.y2_pred:
-                cv2.rectangle(frame, (bd.x1_pred, bd.y1_pred), (bd.x2_pred, bd.y2_pred), (255, 255, 255), 2)
 
         # Show no tracking box
         for bd_void in self.box_detection:
@@ -752,18 +748,31 @@ class CameraDetection:
 
     def key_press(self, key):
         """ change box zone detection """
+
         if key == 32:
             # space press
-            zone_plots = self.get_zone_plot()
 
-            if self.key_plot == len(zone_plots) - 1:
-                self.key_plot = 0
+            (j, i) = self.grid_pt_selected
+
+            if i + 1 < self.grid_dimension:
+                i += 1
             else:
-                self.key_plot += 1
+                i = 0
+
+                if j + 1 < self.grid_dimension:
+                    j += 1
+                else:
+                    j = 0
+
+            self.grid_pt_selected = (j, i)
+
+        elif key == ord('I'):
+            self.init_grid()
+
         else:
             x = 0
             y = 0
-            delta = 10
+            delta = 5
             if key == 82:  # flèche haut
                 y -= delta
             elif key == 84:  # flèche bas
@@ -773,12 +782,8 @@ class CameraDetection:
             elif key == 83:  # flèche droite
                 x += delta
 
-            if self.zone_detection and (x or y):
-                zone_plots = self.get_zone_plot()
-                new_plot = (zone_plots[self.key_plot][0] + x, zone_plots[self.key_plot][1] + y)
-                self.put_zone_plot(self.key_plot, new_plot)
-                for zone in self.zone_detection:
-                    zone.update_h()
+            (j, i) = self.grid_pt_selected
+            self.grid[j][i] = [self.grid[j][i][0] + x, self.grid[j][i][1] + y]
 
     def upadte_mean_h_w(self):
         """ Update the value of mean h and w """
@@ -799,20 +804,39 @@ class CameraDetection:
         """ update the x and y value of box tracking """
         for box_tracking in self.tracking_detection:
 
-            xp = float((0.5 * (box_tracking.x2_ok - box_tracking.x1_ok)) + box_tracking.x1_ok)
-            yp = float(box_tracking.y2_ok)
+            xp = float((0.5 * (box_tracking.x2 - box_tracking.x1)) + box_tracking.x1)
+            yp = float(box_tracking.y2)
 
             zone_result = []
 
-            for zone_detection in self.zone_detection:
-                x, y = zone_detection.image_to_ground(xp, yp)
-                zone_result.append((int(x), int(y)))
+            x, y = None, None
+            for zone_detection in self.zone_detection[:-1]:
+                if zone_detection.plot_in_image((xp, yp)):
+                    x, y = zone_detection.image_to_ground(xp, yp)
+                    box_tracking.x = int(x)
+                    box_tracking.y = int(y)
+                    break
 
-            box_tracking.zone_xy = zone_result
+            if x is None:
+                x, y = self.zone_detection[-1].image_to_ground(xp, yp)
+                max_25 = int(0.25 * self.grid_max_value)
+                max_75 = int(0.75 * self.grid_max_value)
+                max_100 = self.grid_max_value
 
-            if box_tracking.zone_xy:
-                box_tracking.x = box_tracking.zone_xy[0][0]
-                box_tracking.y = box_tracking.zone_xy[0][1]
+                if 0 < x < max_25 and 0 < y < max_100:
+                    x = -1
+
+                elif max_75 < x < max_100 and 0 < y < max_100:
+                    y = max_100 + 1
+
+                if 0 < y < max_25 and 0 < x < max_100:
+                    y = -1
+
+                elif max_75 < y < max_100 and 0 < x < max_100:
+                    y = max_100 + 1
+
+                box_tracking.x = int(x)
+                box_tracking.y = int(y)
 
             box_tracking.last_position.append((box_tracking.x, box_tracking.y))
             if len(box_tracking.last_position) > self.last_position_max:
@@ -838,8 +862,9 @@ class CameraDetection:
 
     def get_new_tracking_index(self):
         """ return next tracking index """
+        index = int(time.strftime("%H%M%S", time.localtime(time.time()))) * 10
         self.tracking_index += 1
-        return int(self.tracking_index)
+        return int(index + self.tracking_index)
 
     def compute_tracker(self):
         """ add tracking boottrack """
@@ -1003,6 +1028,7 @@ class CameraDetection:
             elif box_detection.track_id:
                 # New
                 tracking_detection = TrackingDetection()
+                tracking_detection.last_position_max = self.last_position_max
                 tracking_detection.tracking_id = self.get_new_tracking_index()
                 tracking_detection.state = 'new'
                 tracking_detection.tracker_fields = self.tracker_fields
@@ -1018,8 +1044,10 @@ class CameraDetection:
         self.update_statistic()
 
         # Update XY
-        self.update_tracking_detection_occluded()
+        #self.update_tracking_detection_occluded()
         self.upadte_mean_h_w()
+        self.update_xy_tracking()
+
         for tracking_detection in self.tracking_detection:
             tracking_detection.predict_next_point()
             tracking_detection.validation_xy()
@@ -1064,8 +1092,8 @@ class CameraDetection:
                 tracking_datas.append({
                     "tracking_id": int(tracking_detection.tracking_id),
                     "related_client_id": tracking_detection.related_client_id,
-                    "posX": int(100.0 * tracking_detection.x),
-                    "posY": int(100.0 * tracking_detection.y),
+                    "posX": int(tracking_detection.x_pred),
+                    "posY": int(tracking_detection.y_pred),
                     "state": tracking_detection.state,
                     "lost_frame": tracking_detection.lost_frame,
                     "zone": "game",
@@ -1135,7 +1163,7 @@ class CameraDetection:
 
                 # Dessiner les boîtes sur l'image originale
                 frame = self.camera_frame
-                frame = self.show_zone_detection(frame)
+                frame = self.show_grid(frame)
                 frame = self.show_tracking(frame)
 
 
