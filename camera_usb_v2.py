@@ -15,6 +15,7 @@ from pathlib import Path
 import threading
 import argparse
 from collections import Counter
+import math
 
 
 red_color = (0, 0, 255)
@@ -35,7 +36,19 @@ class BoxDetection:
         self.track_byte_id = 0  # ByteTrack tracking 0 = None
         self.track_ocsort_id = 0  # ocsort tracking 0 = None
 
+        self.tracking_ok = 0
+        self.tracking_ko = 0
 
+        self.tracking_id = 0
+        self.state = "tracking"
+
+        self.x = 0
+        self.y = 0
+
+    def distance_tracking(self, tracking_detection):
+        """ return the distance """
+        distance = math.sqrt((self.x - tracking_detection.x)**2 + (self.y - tracking_detection.y)**2)
+        return distance
 
 class TrackingDetection:
     def __init__(self):
@@ -107,29 +120,31 @@ class TrackingDetection:
             vx = []
             vy = []
             # Calcul des vitesses entre points successifs
-            for i in range(self.last_position_max - 1):
-                vx.append(points[-(i + 1)][0] - points[-(i + 2)][0])
-                vy.append(points[-(i + 1)][1] - points[-(i + 2)][1])
 
-            if vx and vy:
-                # Moyenne des 2 dernieres vitesses
-                avg_vx2 = sum(vx[:2]) / 2
-                avg_vy2 = sum(vy[:2]) / 2
+            vx.append(points[-1][0] - points[-2][0])
+            vy.append(points[-1][1] - points[-2][1])
 
-                # Limitation if tracking lost
-                if self.state == 'lost':
-                    avg_vx2 = 0.75 * avg_vx2
-                    avg_vy2 = 0.75 * avg_vy2
+            vx.append(points[-1][0] - points[-3][0])
+            vy.append(points[-1][1] - points[-3][1])
 
-                # Dernier point connu
-                last_x, last_y = points[-1]
+            vx.append(points[-1][0] - points[-4][0])
+            vy.append(points[-1][1] - points[-4][1])
 
-                # Prédiction du prochain point
-                self.x_pred = last_x + avg_vx2
-                self.y_pred = last_y + avg_vy2
-            else:
-                self.x_pred = self.x
-                self.y_pred = self.y
+            avg_vx2 = sum(vx) / 3
+            avg_vy2 = sum(vy) / 3
+
+            if self.state == 'lost':
+                avg_vx2 = int(avg_vx2 / self.lost_frame)
+                avg_vy2 = int(avg_vy2 / self.lost_frame)
+
+            # Prédiction du prochain point
+            self.x_pred = self.x + avg_vx2
+            self.y_pred = self.y + avg_vy2
+
+            if self.state == 'lost':
+                self.x = self.x_pred
+                self.y = self.y_pred
+
         else:
             self.x_pred = self.x
             self.y_pred = self.y
@@ -144,6 +159,9 @@ class TrackingDetection:
         self.y1 = boxdetection.y1
         self.x2 = boxdetection.x2
         self.y2 = boxdetection.y2
+
+        self.x = boxdetection.x
+        self.y = boxdetection.y
 
         self.class_id = boxdetection.class_id
         self.conf = boxdetection.conf
@@ -316,8 +334,15 @@ class CameraDetection:
         # cap.set(cv2.CAP_PROP_BACKLIGHT, 1)      # Compensation du rétroéclairage
         # cap.set(cv2.CAP_PROP_EXPOSURE, -4)      # Exposition (souvent négatif = automatique désactivé)
 
+        self.grid_origin = (int(0.2 * self.camera_width), int(0.45 * self.camera_height))
+        self.grid_dimension = 5
+        self.grid_max_value = 1000
+
+        self.grid = []
+        self.grid_pt_selected = (0, 0)
+
         self.yolo_model_name = "yolo12x.pt"
-        self.yolo_conf = 0.1 # seuil de confiance
+        self.yolo_conf = 0.05 # seuil de confiance
         self.yolo_filter_class = [0] # 0: personne, list of class to track
         self.yolo_model = None
         self.tracker = cv2.legacy.TrackerCSRT_create()
@@ -330,6 +355,7 @@ class CameraDetection:
         self.tracking_detection = []
         self.tracking_seuil = 0.5 # surface minimum to link a lost box detection
         self.lost_frame_max = 20
+        self.lost_distance = 0.3 * self.grid_max_value
         self.tracking_index = 0
         self.last_position_max = 5
         self.sending_url = 'http://localhost:8000/camera/detection'
@@ -337,6 +363,10 @@ class CameraDetection:
         self.stat_ok = [0,] * len(self.tracker_fields)
         self.stat_lost = [0,] * len(self.tracker_fields)
         self.stat_new = [0,] * len(self.tracker_fields)
+
+        self.stat_ok_count = 0
+        self.stat_last_count = 0
+        self.stat_new_count = 0
 
         self.time_start = None
         self.time_mean = []
@@ -349,12 +379,7 @@ class CameraDetection:
         self.running = False
         self.thread = None
 
-        self.grid_origin = (int(0.2 * self.camera_width), int(0.45 * self.camera_height))
-        self.grid_dimension = 5
-        self.grid_max_value = 1000
 
-        self.grid = []
-        self.grid_pt_selected = (0, 0)
 
     def init_grid(self):
         """ create starting Grid """
@@ -734,15 +759,25 @@ class CameraDetection:
             cv2.putText(frame, f"x: {bd.x} y: {bd.y}", (xp, yp + 10),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, red_color, 2)
 
+            # Show position
+            x = int(1.5 * bd.x / 10 + self.camera_width - 150)
+            y = int(1.5 * bd.y / 10)
+            cv2.circle(frame, (x, y), 3, color, 2)
+
             # Show prediction position
-            if False:
-                cv2.circle(frame, bd.mean_center[-1], 5, (0,0,0), 2)
+            x = int(1.5 * bd.x_pred / 10 + self.camera_width - 150)
+            y = int(1.5 * bd.y_pred / 10)
+            cv2.circle(frame, (x, y), 6, (255, 255, 255), 1)
+
+        # Show prediction position
+        cv2.rectangle(frame, (self.camera_width - 150, 0),
+                      (self.camera_width, 150), (255, 255, 255), 2)
+
 
         # Show no tracking box
         for bd_void in self.box_detection:
-            if not (bd_void.track_id and bd_void.track_boost_id and bd_void.track_byte_id):
-                color = (0, 0, 0)
-                cv2.rectangle(frame, (bd_void.x1, bd_void.y1), (bd_void.x2, bd_void.y2), (255,255,255), 1)
+            if bd_void.state == "tracking" and not (bd_void.track_id and bd_void.track_boost_id and bd_void.track_byte_id and bd.track_ocsort_id ):
+                cv2.rectangle(frame, (bd_void.x1 -1, bd_void.y1 -1), (bd_void.x2 +1, bd_void.y2 + 1), (0,0,0), 2)
 
         return frame
 
@@ -802,45 +837,54 @@ class CameraDetection:
 
     def update_xy_tracking(self):
         """ update the x and y value of box tracking """
+
         for box_tracking in self.tracking_detection:
-
-            xp = float((0.5 * (box_tracking.x2 - box_tracking.x1)) + box_tracking.x1)
-            yp = float(box_tracking.y2)
-
-            zone_result = []
-
-            x, y = None, None
-            for zone_detection in self.zone_detection[:-1]:
-                if zone_detection.plot_in_image((xp, yp)):
-                    x, y = zone_detection.image_to_ground(xp, yp)
-                    box_tracking.x = int(x)
-                    box_tracking.y = int(y)
-                    break
-
-            if x is None:
-                x, y = self.zone_detection[-1].image_to_ground(xp, yp)
-                max_25 = int(0.25 * self.grid_max_value)
-                max_75 = int(0.75 * self.grid_max_value)
-                max_100 = self.grid_max_value
-
-                if 0 < x < max_25 and 0 < y < max_100:
-                    x = -1
-
-                elif max_75 < x < max_100 and 0 < y < max_100:
-                    y = max_100 + 1
-
-                if 0 < y < max_25 and 0 < x < max_100:
-                    y = -1
-
-                elif max_75 < y < max_100 and 0 < x < max_100:
-                    y = max_100 + 1
-
-                box_tracking.x = int(x)
-                box_tracking.y = int(y)
-
+            if box_tracking.x == 0 and box_tracking.y == 0:
+                continue
             box_tracking.last_position.append((box_tracking.x, box_tracking.y))
             if len(box_tracking.last_position) > self.last_position_max:
                 del(box_tracking.last_position[0])
+
+        def compute_xy(tracking_box):
+
+            for box_tracking in tracking_box:
+
+                xp = float((0.5 * (box_tracking.x2 - box_tracking.x1)) + box_tracking.x1)
+                yp = float(box_tracking.y2)
+
+                zone_result = []
+
+                x, y = None, None
+                for zone_detection in self.zone_detection[:-1]:
+                    if zone_detection.plot_in_image((xp, yp)):
+                        x, y = zone_detection.image_to_ground(xp, yp)
+                        box_tracking.x = int(x)
+                        box_tracking.y = int(y)
+                        break
+
+                if x is None:
+                    x, y = self.zone_detection[-1].image_to_ground(xp, yp)
+                    max_25 = int(0.25 * self.grid_max_value)
+                    max_75 = int(0.75 * self.grid_max_value)
+                    max_100 = self.grid_max_value
+
+                    if 0 < x < max_25 and 0 < y < max_100:
+                        x = -1
+
+                    elif max_75 < x < max_100 and 0 < y < max_100:
+                        y = max_100 + 1
+
+                    if 0 < y < max_25 and 0 < x < max_100:
+                        y = -1
+
+                    elif max_75 < y < max_100 and 0 < x < max_100:
+                        y = max_100 + 1
+
+                    box_tracking.x = int(x)
+                    box_tracking.y = int(y)
+
+        compute_xy(self.tracking_detection)
+        compute_xy(self.box_detection)
 
     def update_tracking_detection_occluded(self):
         """ Update occluded box tracking """
@@ -969,7 +1013,10 @@ class CameraDetection:
         box_detection_ok = []
 
         # --------- tracking update
+        self.update_xy_tracking()
         box_detection_tracking = []
+        print('--------self.box_detection---------', len(self.box_detection))
+        print('--------self.tracking_detection---------', len(self.tracking_detection))
 
         for box_detection in self.box_detection:
             tracking_ids = []
@@ -990,6 +1037,8 @@ class CameraDetection:
                 most_box_tracking.lost_frame = 0
                 most_box_tracking.tracking_ok += 1
                 most_box_tracking.update_by_boxdetection(box_detection)
+                box_detection.tracking_id = most_box_tracking.tracking_id
+                box_detection.state = 'ok'
                 box_detection_ok.append(box_detection)
 
         # --------- tracking lost
@@ -999,41 +1048,28 @@ class CameraDetection:
                 tracking_detection.lost_frame += 1
                 tracking_detection.tracking_ko += 1
 
-                # --------- Check new box_detection
-                score_proximity = {}
-                for box_detection in self.box_detection:
-                    # Check if some box_detection is corresponding
-                    if box_detection in box_detection_ok:
-                        continue
-                    elif box_detection.track_id or box_detection.track_byte_id or box_detection.track_boost_id:
-                        score = tracking_detection.intersection_boxdetection(box_detection)
-                        score_proximity[score] = box_detection
-
-                if False and score_proximity:
-                    score_max = max(list(score_proximity.keys()))
-                    if score_max >= self.tracking_seuil:
-                        tracking_detection.state = 'ok'
-                        if self.lost_frame_max < tracking_detection.lost_frame:
-                            self.lost_frame_max = tracking_detection.lost_frame
-                        tracking_detection.lost_frame = 0
-                        tracking_detection.update_by_boxdetection(box_detection)
-
-                        box_detection_ok.append(box_detection)
-
         # --------- tracking new
         for box_detection in self.box_detection:
             # Check if some lost tracking_detection is corresponding
             if box_detection in box_detection_ok:
                 continue
             elif box_detection.track_id:
+                if not(0 < box_detection.x < self.grid_max_value and 0 < box_detection.y < self.grid_max_value):
+                    max_10 = int(0.1 * self.grid_max_value)
+                    if - max_10 < box_detection.x < self.grid_max_value + max_10 and - max_10 < box_detection.y < self.grid_max_value + max_10:
+                        self.create_new_tracking_detection(box_detection)
+                        box_detection_ok.append(box_detection)
+                    continue
+
+                # Check if tracking lost to associate
+                tracking_detection_lost = self.get_tracking_lost_near_detection(box_detection)
+                if len(tracking_detection_lost) == 1:
+                    self.update_tracking_detection(tracking_detection_lost[0], box_detection)
+                    box_detection_ok.append(box_detection)
+                    continue
+
                 # New
-                tracking_detection = TrackingDetection()
-                tracking_detection.last_position_max = self.last_position_max
-                tracking_detection.tracking_id = self.get_new_tracking_index()
-                tracking_detection.state = 'new'
-                tracking_detection.tracker_fields = self.tracker_fields
-                tracking_detection.update_by_boxdetection(box_detection)
-                self.tracking_detection.append(tracking_detection)
+                self.create_new_tracking_detection(box_detection)
 
         # Delete old box_detection
         for tracking_detection in self.tracking_detection:
@@ -1046,16 +1082,49 @@ class CameraDetection:
         # Update XY
         #self.update_tracking_detection_occluded()
         self.upadte_mean_h_w()
-        self.update_xy_tracking()
 
         for tracking_detection in self.tracking_detection:
             tracking_detection.predict_next_point()
             tracking_detection.validation_xy()
 
-        self.update_xy_tracking()
+    def update_tracking_detection(self, tracking_detection, box_detection):
+        """ Update tracking by box detection """
+        tracking_detection.state = 'ok'
+        tracking_detection.lost_frame = 0
+        tracking_detection.tracking_ok += 1
+        tracking_detection.update_by_boxdetection(box_detection)
+        box_detection.tracking_id = tracking_detection.tracking_id
+        box_detection.state = 'ok'
+
+    def create_new_tracking_detection(self, box_detection):
+        """ Create new tracking with box detection """
+        tracking_detection = TrackingDetection()
+        tracking_detection.last_position_max = self.last_position_max
+        tracking_detection.tracking_id = self.get_new_tracking_index()
+        tracking_detection.state = 'new'
+        tracking_detection.tracker_fields = self.tracker_fields
+        tracking_detection.update_by_boxdetection(box_detection)
+        self.tracking_detection.append(tracking_detection)
+        return tracking_detection
+
+    def get_tracking_lost_near_detection(self, box_detection):
+        """ return list of tracking box lost near detection """
+        result = []
+        for tracking_detection in self.tracking_detection:
+            if tracking_detection.state == "lost":
+                distance = box_detection.distance_tracking(tracking_detection)
+                if distance > self.lost_distance:
+                    continue
+                else:
+                    result.append(tracking_detection)
+        return result
 
     def update_statistic(self):
         """ update statistic of tracker """
+        stat_ok_count = 0
+        stat_last_count = 0
+        stat_new_count = 0
+
         for tracking_detection in self.tracking_detection:
             if tracking_detection.state == 'ok':
                 statistic_ok = self.stat_ok.copy()
@@ -1067,19 +1136,26 @@ class CameraDetection:
                         statistic_lost[i] += 1
                 self.stat_ok = statistic_ok
                 self.stat_lost = statistic_lost
+                stat_ok_count += 1
 
-            if tracking_detection.state == 'new':
+            elif tracking_detection.state == 'new':
                 statistic_new = self.stat_new.copy()
                 for i, field_track in enumerate(self.tracker_fields):
                     if getattr(tracking_detection, field_track):
                         statistic_new[i] += 1
                 self.stat_new = statistic_new
+                stat_new_count += 1
 
-            if tracking_detection.state == 'lost':
+            elif tracking_detection.state == 'lost':
                 statistic_lost = self.stat_lost.copy()
                 for i, field_track in enumerate(self.tracker_fields):
                     statistic_lost[i] += 1
                 self.stat_lost = statistic_lost
+                stat_last_count += 1
+
+        self.stat_ok_count = stat_ok_count
+        self.stat_last_count = stat_last_count
+        self.stat_new_count = stat_new_count
 
     def send_tracking_datas(self):
         """ send tracking data """
@@ -1185,10 +1261,12 @@ class CameraDetection:
             elif key:
                 self.key_press(key)
 
-            while args.step and key != ord('a'):
+            if args.step == '2' and self.stat_new_count > 0:
+                while key != ord('a'):
+                    key = cv2.waitKey(1) & 0xFF
+
+            while args.step == '1' and key != ord('a'):
                 key = cv2.waitKey(1) & 0xFF
-                if key == ord('a'):
-                    sleep_key = False
 
         # Libère les ressources
         if out is not None:
