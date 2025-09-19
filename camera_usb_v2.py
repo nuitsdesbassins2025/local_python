@@ -1011,9 +1011,6 @@ class CameraDetection:
         """ compute new tracking with box_detection """
 
         self.compute_tracker()
-
-        tracking_detection_old = self.tracking_detection.copy()
-
         self.tracking_detection_save()
 
         history_track = self.get_history_track()
@@ -1040,7 +1037,11 @@ class CameraDetection:
                         setattr(box_detection, field_track, 0)
 
                 most_box_tracking.state = 'ok'
+                
+                if most_box_tracking.lost_frame > self.lost_frame_max:
+                    self.lost_frame_max = most_box_tracking.lost_frame
                 most_box_tracking.lost_frame = 0
+
                 most_box_tracking.tracking_ok += 1
                 most_box_tracking.update_by_boxdetection(box_detection)
                 box_detection.tracking_id = most_box_tracking.tracking_id
@@ -1079,7 +1080,7 @@ class CameraDetection:
 
         # Delete old box_detection
         for tracking_detection in self.tracking_detection:
-            if tracking_detection.lost_frame > int(2 * self.lost_frame_max):
+            if tracking_detection.lost_frame > int(1.5 * self.lost_frame_max):
                 self.tracking_detection.remove(tracking_detection)
 
         # statistic
