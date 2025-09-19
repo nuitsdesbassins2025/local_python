@@ -1016,7 +1016,6 @@ class CameraDetection:
 
         self.tracking_detection_save()
 
-
         history_track = self.get_history_track()
         update_tracking_detection = []
         box_detection_ok = []
@@ -1024,8 +1023,6 @@ class CameraDetection:
         # --------- tracking update
         self.update_xy_tracking()
         box_detection_tracking = []
-        print('--------self.box_detection---------', len(self.box_detection))
-        print('--------self.tracking_detection---------', len(self.tracking_detection))
 
         for box_detection in self.box_detection:
             tracking_ids = []
@@ -1190,7 +1187,10 @@ class CameraDetection:
             }
 
         try:
-            t = threading.Thread(target=httpx.post(self.sending_url, json=data, timeout=1.0), args=(self.sending_url, data))
+            t = threading.Thread(
+                target=httpx.post,
+                kwargs={"url": self.sending_url, "json": data, "timeout": 1.0}
+            )
             t.start()
             # response = httpx.post(self.sending_url, json=data, timeout=1.0)
         except Exception as e:
