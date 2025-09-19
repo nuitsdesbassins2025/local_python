@@ -776,7 +776,7 @@ class CameraDetection:
 
         # Show no tracking box
         for bd_void in self.box_detection:
-            if bd_void.state == "tracking" and not (bd_void.track_id and bd_void.track_boost_id and bd_void.track_byte_id and bd.track_ocsort_id ):
+            if bd_void.state == "tracking" and not (bd_void.track_id and bd_void.track_boost_id and bd_void.track_byte_id and bd_void.track_ocsort_id ):
                 cv2.rectangle(frame, (bd_void.x1 -1, bd_void.y1 -1), (bd_void.x2 +1, bd_void.y2 + 1), (0,0,0), 2)
 
         return frame
