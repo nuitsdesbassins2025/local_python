@@ -44,6 +44,8 @@ class BoxDetection:
         self.tracking_id = 0
         self.state = "tracking"
 
+        self.mean_h = []
+
         self.x = 0
         self.y = 0
 
@@ -840,19 +842,24 @@ class CameraDetection:
     def update_xy_tracking(self):
         """ update the x and y value of box tracking """
 
-        for box_tracking in self.tracking_detection:
-            if box_tracking.x == 0 and box_tracking.y == 0:
+        for tracking_detection in self.tracking_detection:
+            if tracking_detection.x == 0 and tracking_detection.y == 0:
                 continue
-            box_tracking.last_position.append((box_tracking.x, box_tracking.y))
-            if len(box_tracking.last_position) > self.last_position_max:
-                del(box_tracking.last_position[0])
+            tracking_detection.last_position.append((tracking_detection.x, tracking_detection.y))
+            if len(tracking_detection.last_position) > self.last_position_max:
+                del(tracking_detection.last_position[0])
 
-        def compute_xy(tracking_box):
+        def compute_xy(box_trackings):
 
-            for box_tracking in tracking_box:
+            for box_tracking in box_trackings:
 
                 xp = float((0.5 * (box_tracking.x2 - box_tracking.x1)) + box_tracking.x1)
                 yp = float(box_tracking.y2)
+
+                # lissage hauteur
+                if box_tracking.mean_h:
+                    mean_h = sum(box_tracking.mean_h) / len(box_tracking.mean_h)
+                    yp = float(box_tracking.y1 + mean_h)
 
                 zone_result = []
 
@@ -1220,7 +1227,7 @@ class CameraDetection:
             self.camera_usb_number = int(args.camera_usb_number)
 
         if args.in_video:
-            self.init_video(args.video)
+            self.init_video(args.in_video)
         else:
             self.init_camera()
 
