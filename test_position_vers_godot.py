@@ -15,9 +15,6 @@ from pathlib import Path
 import threading
 import argparse
 from collections import Counter
-import math
-import os
-import datetime
 
 
 red_color = (0, 0, 255)
@@ -38,27 +35,13 @@ class BoxDetection:
         self.track_byte_id = 0  # ByteTrack tracking 0 = None
         self.track_ocsort_id = 0  # ocsort tracking 0 = None
 
-        self.tracking_ok = 0
-        self.tracking_ko = 0
 
-        self.tracking_id = 0
-        self.state = "tracking"
-
-        self.x = 0
-        self.y = 0
-
-    def distance_tracking(self, tracking_detection):
-        """ return the distance """
-        distance = math.sqrt((self.x - tracking_detection.x)**2 + (self.y - tracking_detection.y)**2)
-        return distance
 
 class TrackingDetection:
     def __init__(self):
         self.x = 0
         self.y = 0
         self.last_position = []
-        self.last_position_max = 5
-
         self.x1 = 0
         self.y1 = 0
         self.x2 = 0
@@ -68,10 +51,6 @@ class TrackingDetection:
         self.mean_h = []
         self.mean_center = []
         self.center_pred = (0, 0)
-
-        self.x_pred = 0
-        self.y_pred = 0
-
         self.x1_pred = 0
         self.y1_pred = 0
         self.x2_pred = 0
@@ -117,43 +96,60 @@ class TrackingDetection:
     def predict_next_point(self):
         """ estimation of next point """
 
-        if len(self.last_position) >= self.last_position_max:
-            points = self.last_position
-            vx = []
-            vy = []
+        if len(self.mean_center) > 3:
+            points = self.mean_center
+            velocities= []
             # Calcul des vitesses entre points successifs
-
-            vx.append(points[-1][0] - points[-2][0])
-            vy.append(points[-1][1] - points[-2][1])
-
-            vx.append(points[-1][0] - points[-3][0])
-            vy.append(points[-1][1] - points[-3][1])
-
-            vx.append(points[-1][0] - points[-4][0])
-            vy.append(points[-1][1] - points[-4][1])
-
-            avg_vx2 = sum(vx) / 3
-            avg_vy2 = sum(vy) / 3
-
+            k_ok = 1
             if self.state == 'lost':
-                avg_vx2 = int(avg_vx2 / self.lost_frame)
-                avg_vy2 = int(avg_vy2 / self.lost_frame)
+                k_ok = 0.75
 
-            # Prédiction du prochain point
-            self.x_pred = self.x + avg_vx2
-            self.y_pred = self.y + avg_vy2
+            for i in range(3):
+                velocities.append((points[-(i + 1)][0] - points[-(i + 2)][0], points[-(i + 1)][1] - points[-(i + 2)][1]))
 
-            if self.state == 'lost':
-                self.x = self.x_pred
-                self.y = self.y_pred
+            if velocities:
+                # Moyenne des vitesses
+                avg_vx = 0
+                avg_vy = 0
+                for v in velocities:
+                    avg_vx += v[0]
+                    avg_vy += v[1]
 
-        else:
-            self.x_pred = self.x
-            self.y_pred = self.y
+                    avg_vx = int(k_ok * avg_vx / len(velocities))
+                    avg_vy = int(k_ok * avg_vy / len(velocities))
+
+                # Dernier point connu
+                last_x, last_y = points[-1]
+
+                # Prédiction du prochain point
+
+
+                self.center_pred = (last_x + avg_vx, last_y + avg_vy)
+                mean_w = int(sum(self.mean_w) / len(self.mean_w) / 2)
+                mean_h = int(sum(self.mean_h) / len(self.mean_h) / 2)
+                self.x1_pred = last_x + avg_vx - mean_w
+                self.y1_pred = last_y + avg_vy - mean_h
+                self.x2_pred = last_x + avg_vx + mean_w
+                self.y2_pred = last_y + avg_vy + mean_h
+            else:
+                self.x1_pred = self.x1
+                self.y1_pred = self.y1
+                self.x2_pred = self.x2
+                self.y2_pred = self.y2
+
 
     def validation_xy(self):
         """ Last validation  xy  values """
-        pass
+        self.x1_ok = self.x1_pred
+        self.y1_ok = self.y1_pred
+        self.x2_ok = self.x2_pred
+        self.y2_ok = self.y2_pred
+        if self.state == 'lost':
+            self.x1 = self.x1_pred
+            self.y1 = self.y1_pred
+            self.x2 = self.x2_pred
+            self.y2 = self.y2_pred
+
 
     def update_by_boxdetection(self, boxdetection):
         """ update value """
@@ -161,9 +157,6 @@ class TrackingDetection:
         self.y1 = boxdetection.y1
         self.x2 = boxdetection.x2
         self.y2 = boxdetection.y2
-
-        self.x = boxdetection.x
-        self.y = boxdetection.y
 
         self.class_id = boxdetection.class_id
         self.conf = boxdetection.conf
@@ -188,6 +181,7 @@ class TrackingDetection:
             return 0.0  # pas d'intersection
 
         return (xB - xA) * (yB - yA)
+
 
     def get_bbox(self):
         """ return bbox """
@@ -250,63 +244,20 @@ class TrackingDetection:
 
 class ZoneDetection:
     def __init__(self):
-        """ playing zone
-        plot matix exemple
-        [
-        (200, 100)  # Haut-gauche
-        (600, 100)  # Haut-droit
-        (700, 400)  # Bas-droit
-        (100, 400)  # Bas-gauche
-        ]
+        """ playing zone """
+        # Définir les 4 points du trapèze zone de jeux (x, y)
+        self.pt1 = (200, 100)  # Haut-gauche
+        self.pt2 = (600, 100)  # Haut-droit
+        self.pt3 = (700, 400)  # Bas-droit
+        self.pt4 = (100, 400)  # Bas-gauche
+        self.color = red_color
 
-        """
-        self.pts_ground = []
-        self.pts_image = []
-
-        self.H = None #  homography matrix
-        self.H_inv = None # inverse homography matrix
-
-    def update_h(self):
-        """ compute homography matrix """
-        self.H = cv2.getPerspectiveTransform(self.pts_image, self.pts_ground)
-        self.H_inv = np.linalg.inv(self.H)
-
-    def image_to_ground(self, u, v):
-        """ return x, y with homogrphy [(0,0), (100,100)] """
-        if self.H is None:
-            self.update_h()
-        pt = np.array([[[u, v]]], dtype=np.float32)
-        pt_transformed = cv2.perspectiveTransform(pt, self.H)
-        return pt_transformed[0][0]
-
-    def ground_to_image(self, X, Y):
-        """
-        Convertit une position au sol (X, Y) en mètres → en coordonnées image (u, v) en pixels
-        """
-        if self.H_inv is None:
-            self.update_h()
-        pt_ground = np.array([[[X, Y]]], dtype=np.float32)  # forme (1, 1, 2)
-        pt_image = cv2.perspectiveTransform(pt_ground, self.H_inv)
-        u, v = pt_image[0][0]
-        return (int(u), int(v))
-
-    def plot_in_image(self, plot):
-        """ return true if the plot is in the zone
-        plot = (x, y)
-        """
-        result = cv2.pointPolygonTest(self.pts_image, plot, False)
-        if result >= 0:
-            return True
-        return False
-
-    def plot_in_ground(self, plot):
-        """ return true if the plot is in the zone
-        plot = (x, y)
-        """
-        result = cv2.pointPolygonTest(self.pts_ground, plot, False)
-        if result >= 0:
-            return True
-        return False
+    def show_zone_detection(self, frame):
+        """ Add polyline on frame """
+        trapeze_pts = np.array([self.pt1, self.pt2, self.pt3, self.pt4], dtype=np.int32)
+        trapeze_pts = trapeze_pts.reshape((-1, 1, 2))
+        cv2.polylines(frame, [trapeze_pts], isClosed=True, color=self.color, thickness=2)
+        return frame
 
 
 class CameraDetection:
@@ -336,15 +287,8 @@ class CameraDetection:
         # cap.set(cv2.CAP_PROP_BACKLIGHT, 1)      # Compensation du rétroéclairage
         # cap.set(cv2.CAP_PROP_EXPOSURE, -4)      # Exposition (souvent négatif = automatique désactivé)
 
-        self.grid_origin = (int(0.2 * self.camera_width), int(0.45 * self.camera_height))
-        self.grid_dimension = 5
-        self.grid_max_value = 1000
-
-        self.grid = []
-        self.grid_pt_selected = (0, 0)
-
         self.yolo_model_name = "yolo12x.pt"
-        self.yolo_conf = 0.05 # seuil de confiance
+        self.yolo_conf = 0.1 # seuil de confiance
         self.yolo_filter_class = [0] # 0: personne, list of class to track
         self.yolo_model = None
         self.tracker = cv2.legacy.TrackerCSRT_create()
@@ -357,7 +301,6 @@ class CameraDetection:
         self.tracking_detection = []
         self.tracking_seuil = 0.5 # surface minimum to link a lost box detection
         self.lost_frame_max = 20
-        self.lost_distance = 0.3 * self.grid_max_value
         self.tracking_index = 0
         self.last_position_max = 5
         self.sending_url = 'http://localhost:8000/camera/detection'
@@ -365,10 +308,6 @@ class CameraDetection:
         self.stat_ok = [0,] * len(self.tracker_fields)
         self.stat_lost = [0,] * len(self.tracker_fields)
         self.stat_new = [0,] * len(self.tracker_fields)
-
-        self.stat_ok_count = 0
-        self.stat_last_count = 0
-        self.stat_new_count = 0
 
         self.time_start = None
         self.time_mean = []
@@ -381,93 +320,6 @@ class CameraDetection:
         self.running = False
         self.thread = None
 
-
-
-    def init_grid(self):
-        """ create starting Grid """
-        grid = []
-        x_step = int(0.5 * self.camera_width / self.grid_dimension)
-        y_step = int(0.5 * self.camera_height / self.grid_dimension)
-
-        for y in range(self.grid_dimension):
-            row =[]
-            for x in range(self.grid_dimension):
-                row.append((self.grid_origin[0] + int(x * x_step), self.grid_origin[1] + int(y * y_step)))
-            grid.append(row)
-        self.grid = grid
-        self.create_grid_zone()
-
-    def create_grid_zone(self):
-        """ split grid in zone """
-        # Parcourir chaque coin haut-gauche possible d'un bloc 2x2
-        zone_detection = []
-        max_value_world = self.grid_max_value
-        step_world = int(max_value_world / (len(self.grid) - 1))
-
-        for j in range(len(self.grid) - 1):
-            for i in range(len(self.grid) - 1):
-                # Extraire le bloc 2x2
-                pts_image = np.array([
-                    [self.grid[j+1][i][0], self.grid[j+1][i][1]],  # coin grille bas gauche
-                    [self.grid[j+1][i+1][0], self.grid[j+1][i+1][1]],  # coin grille bas droite
-                    [self.grid[j][i+1][0], self.grid[j][i+1][1]],  # coin grille haut droite
-                    [self.grid[j][i][0], self.grid[j][i][1]],  # coin grille haut gauche
-                ], dtype=np.float32)
-
-                pts_ground = np.array([
-                    [i * step_world, (j + 1) * step_world],
-                    [(i + 1) * step_world, (j + 1) * step_world],
-                    [(i + 1) * step_world, j * step_world],
-                    [i * step_world, j * step_world],
-
-                ], dtype=np.float32)
-
-                new_zone_detection = ZoneDetection()
-                new_zone_detection.pts_image = pts_image
-                new_zone_detection.pts_ground = pts_ground
-                new_zone_detection.update_h()
-                self.zone_detection.append(new_zone_detection)
-
-        # Add total zone (used for external position)
-        pts_image = np.array([
-            [self.grid[-1][0][0], self.grid[-1][0][1]],  # coin grille bas gauche
-            [self.grid[-1][-1][0], self.grid[-1][-1][1]],  # coin grille bas droite
-            [self.grid[0][-1][0], self.grid[0][-1][1]],  # coin grille haut droite
-            [self.grid[0][0][0], self.grid[0][0][1]],  # coin grille haut gauche
-        ], dtype=np.float32)
-
-        pts_ground = np.array([
-            [0, max_value_world],
-            [max_value_world, max_value_world],
-            [max_value_world, 0],
-            [0, 0],
-
-        ], dtype=np.float32)
-
-        new_zone_detection = ZoneDetection()
-        new_zone_detection.pts_image = pts_image
-        new_zone_detection.pts_ground = pts_ground
-        new_zone_detection.update_h()
-        self.zone_detection.append(new_zone_detection)
-
-    def show_grid(self, frame):
-        """ Show the grid """
-
-        for i in range(self.grid_dimension):
-            for j in range(self.grid_dimension - 1):
-                pt1 = self.grid[i][j]
-                pt2 = self.grid[i][j + 1]
-                cv2.line(frame, pt1, pt2, red_color, thickness=2)
-
-        for j in range(5):
-            for i in range(4):  # de i=0 à i=3
-                pt1 = self.grid[i][j]
-                pt2 = self.grid[i +1 ][j]
-                cv2.line(frame, pt1, pt2, red_color, thickness=2)
-
-        cv2.circle(frame, self.grid[self.grid_pt_selected[0]][self.grid_pt_selected[1]], 10, red_color, 2)
-
-        return frame
 
     def update(self):
         while self.running:
@@ -500,9 +352,8 @@ class CameraDetection:
             self.detect_camera()
 
         self.camera = cv2.VideoCapture(self.camera_usb_number)
-        # (640, 480), (1280, 800), (1920, 1080), (2560, 1440),
 
-        resolutions = [(640, 480), (800, 600), (1280, 720), (1280, 800)]
+        resolutions = [(800, 600), (1280, 800), (1280, 720)]
         for (w, h) in resolutions:
             self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, w)
             self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, h)
@@ -516,7 +367,6 @@ class CameraDetection:
         self.thread = threading.Thread(target=self.update, daemon=True)
         self.running = True
         self.thread.start()
-        time.sleep(0.5)
 
     def get_camera_frame(self):
 
@@ -551,8 +401,15 @@ class CameraDetection:
         data = {
             "camera_width": self.camera_width,
             "camera_height": self.camera_height,
-            "grid": self.grid,
+            "zone_detection": []
         }
+        for zone_detection in self.zone_detection:
+            data["zone_detection"].append([
+                list(zone_detection.pt1),
+                list(zone_detection.pt2),
+                list(zone_detection.pt3),
+                list(zone_detection.pt4),
+                list(zone_detection.color)])
 
         with open(filepath, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=4)
@@ -562,32 +419,43 @@ class CameraDetection:
         with open(filepath, "r", encoding="utf-8") as f:
             data = json.load(f)
 
-        if data.get('grid'):
-            self.grid = data.get('grid')
-            self.create_grid_zone()
-        else:
-            self.init_grid()
+        self.zone_detection = []
+        for zone_detection in data['zone_detection']:
+            new_zone_detection = ZoneDetection()
+            new_zone_detection.pt1 = tuple(zone_detection[0])
+            new_zone_detection.pt2 = tuple(zone_detection[1])
+            new_zone_detection.pt3 = tuple(zone_detection[2])
+            new_zone_detection.pt4 = tuple(zone_detection[3])
+            new_zone_detection.color = tuple(zone_detection[4])
+            self.zone_detection.append(new_zone_detection)
 
     def track_fps(self, nb_time=10):
         """ track FPS """
         time_start = time.time()
-        camera_fps = self.camera_fps
-        if camera_fps:
-            camera_time = (camera_fps[-1] - camera_fps[0]) / len(camera_fps)
-        else:
-            camera_time = 1.0
-
         if self.time_start is not None:
             time_mean = time_start - self.time_start
             self.time_mean.append(time_mean)
-            self.time_fps = "1"
 
         if len(self.time_mean) > nb_time:
             del(self.time_mean[0])
-            pose_time =  sum(self.time_mean) / len(self.time_mean)
-            fps = int(1.0 / pose_time)
-            self.time_fps = f"{int(fps)}: Cam: {int(100 * camera_time)} ms, Pos: {int(100 * pose_time)} ms"
+            fps = int(1.0 / (sum(self.time_mean) / len(self.time_mean)))
+            self.time_fps = f"{int(fps)}"
         self.time_start = time_start
+
+    def load_zone_detection(self):
+        """ load zone detection """
+        zone_detection = ZoneDetection()
+        self.zone_detection.append(zone_detection)
+
+    def show_zone_detection(self, frame):
+        """ add zone detection on frame """
+        for zone_detection in self.zone_detection:
+            frame = zone_detection.show_zone_detection(frame)
+
+        zone_plots = self.get_zone_plot()
+        cv2.circle(frame, zone_plots[self.key_plot], 10, red_color, 2)
+
+        return frame
 
     def init_video(self, video_path=None):
         """ Ouvre un fichier vidéo pour test """
@@ -723,6 +591,29 @@ class CameraDetection:
 
         self.box_detection = box_detection
 
+    def get_zone_plot(self):
+        """ return list of plot of zone detection """
+        zone_plots = []
+        for zone in self.zone_detection:
+            zone_plots.append(zone.pt1)
+            zone_plots.append(zone.pt2)
+            zone_plots.append(zone.pt3)
+            zone_plots.append(zone.pt4)
+        return zone_plots
+
+    def put_zone_plot(self, i_plot, plot):
+        """ Put new plot on zone plot """
+        i_zone = i_plot // 4
+        i_plot = i_plot - i_zone * 4
+        if i_plot == 0:
+            self.zone_detection[i_zone].pt1 = plot
+        elif i_plot == 1:
+            self.zone_detection[i_zone].pt2 = plot
+        elif i_plot == 2:
+            self.zone_detection[i_zone].pt3 = plot
+        elif i_plot == 3:
+            self.zone_detection[i_zone].pt4 = plot
+
     def show_tracking(self, frame):
         """ Add yolo box detection on frame """
         label_fps = f'{frame.shape} FPS: {self.time_fps}'
@@ -754,62 +645,54 @@ class CameraDetection:
             cv2.putText(frame, f' {bd.tracking_ko}', (bd.x1, bd.y1 + 30),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, blue_color, 2)
 
-            # Current position
+
             xp = int(0.5 * (bd.x2 - bd.x1)) + bd.x1
             yp = bd.y2
             cv2.circle(frame, (xp, yp), 10, red_color, 2)
-            cv2.putText(frame, f"x: {bd.x} y: {bd.y}", (xp, yp + 10),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, red_color, 2)
 
-            # Show position
-            x = int(1.5 * bd.x / 10 + self.camera_width - 150)
-            y = int(1.5 * bd.y / 10)
-            cv2.circle(frame, (x, y), 3, color, 2)
+            for position in bd.show_last_position:
+                cv2.circle(frame, position, 3, red_color, 2)
 
-            # Show prediction position
-            x = int(1.5 * bd.x_pred / 10 + self.camera_width - 150)
-            y = int(1.5 * bd.y_pred / 10)
-            cv2.circle(frame, (x, y), 6, (255, 255, 255), 1)
+            bd.show_last_position.append((xp, yp))
+            if len(bd.show_last_position) > self.last_position_max:
+                del(bd.show_last_position[0])
 
-        # Show prediction position
-        cv2.rectangle(frame, (self.camera_width - 150, 0),
-                      (self.camera_width, 150), (255, 255, 255), 2)
+            if bd.zone_xy:
+                rx = int(bd.zone_xy[0][0] * 100.0)
+                ry = int(bd.zone_xy[0][1] * 100.0)
+                cv2.putText(frame, f"x: {rx} y: {ry}", (xp, yp + 10),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, red_color, 2)
 
+            # Show mean position
+            if bd.mean_center:
+                cv2.circle(frame, bd.mean_center[-1], 5, (0,0,0), 2)
+            if bd.center_pred:
+                cv2.circle(frame, bd.center_pred, 8, (255, 255, 255), 2)
+            if bd.x1_pred and bd.y1_pred and bd.x2_pred and bd.y2_pred:
+                cv2.rectangle(frame, (bd.x1_pred, bd.y1_pred), (bd.x2_pred, bd.y2_pred), (255, 255, 255), 2)
 
         # Show no tracking box
         for bd_void in self.box_detection:
-            if bd_void.state == "tracking" and not (bd_void.track_id and bd_void.track_boost_id and bd_void.track_byte_id and bd_void.track_ocsort_id ):
-                cv2.rectangle(frame, (bd_void.x1 -1, bd_void.y1 -1), (bd_void.x2 +1, bd_void.y2 + 1), (0,0,0), 2)
+            if not (bd_void.track_id and bd_void.track_boost_id and bd_void.track_byte_id):
+                color = (0, 0, 0)
+                cv2.rectangle(frame, (bd_void.x1, bd_void.y1), (bd_void.x2, bd_void.y2), (255,255,255), 1)
 
         return frame
 
     def key_press(self, key):
         """ change box zone detection """
-
         if key == 32:
             # space press
+            zone_plots = self.get_zone_plot()
 
-            (j, i) = self.grid_pt_selected
-
-            if i + 1 < self.grid_dimension:
-                i += 1
+            if self.key_plot == len(zone_plots) - 1:
+                self.key_plot = 0
             else:
-                i = 0
-
-                if j + 1 < self.grid_dimension:
-                    j += 1
-                else:
-                    j = 0
-
-            self.grid_pt_selected = (j, i)
-
-        elif key == ord('I'):
-            self.init_grid()
-
+                self.key_plot += 1
         else:
             x = 0
             y = 0
-            delta = 5
+            delta = 10
             if key == 82:  # flèche haut
                 y -= delta
             elif key == 84:  # flèche bas
@@ -819,8 +702,10 @@ class CameraDetection:
             elif key == 83:  # flèche droite
                 x += delta
 
-            (j, i) = self.grid_pt_selected
-            self.grid[j][i] = [self.grid[j][i][0] + x, self.grid[j][i][1] + y]
+            if self.zone_detection and (x or y):
+                zone_plots = self.get_zone_plot()
+                new_plot = (zone_plots[self.key_plot][0] + x, zone_plots[self.key_plot][1] + y)
+                self.put_zone_plot(self.key_plot, new_plot)
 
     def upadte_mean_h_w(self):
         """ Update the value of mean h and w """
@@ -839,54 +724,36 @@ class CameraDetection:
 
     def update_xy_tracking(self):
         """ update the x and y value of box tracking """
-
         for box_tracking in self.tracking_detection:
-            if box_tracking.x == 0 and box_tracking.y == 0:
-                continue
+            box_result = []
+            xp = float((0.5 * (box_tracking.x2_ok - box_tracking.x1_ok)) + box_tracking.x1_ok)
+            yp = float(box_tracking.y2_ok)
+
+            for zone_detection in self.zone_detection:
+                Lx1 = float(zone_detection.pt2[0] - zone_detection.pt1[0])
+                Lx2 = float(zone_detection.pt3[0] - zone_detection.pt4[0])
+                Rx1 = (xp - zone_detection.pt1[0]) / Lx1
+                Rx2 = (xp - zone_detection.pt4[0]) / Lx2
+                Rx = 0.5 * (Rx1 + Rx2)
+
+                Ly1 = zone_detection.pt4[1] - zone_detection.pt1[1]
+                Ly2 = zone_detection.pt3[1] - zone_detection.pt2[1]
+                Ry1 = (yp - zone_detection.pt1[1]) / Ly1
+                Ry2 = (yp - zone_detection.pt2[1]) / Ly2
+                Ry = 0.5 * (Ry1 + Ry2)
+
+                x = (1.0 - Ry) * Rx1 + Ry * Rx2
+                y = (1.0 - Rx) * Ry1 + Rx * Ry2
+                box_result.append((x, y))
+
+            box_tracking.zone_xy = box_result
+            if box_tracking.zone_xy:
+                box_tracking.x = box_tracking.zone_xy[0][0]
+                box_tracking.y = box_tracking.zone_xy[0][1]
+
             box_tracking.last_position.append((box_tracking.x, box_tracking.y))
             if len(box_tracking.last_position) > self.last_position_max:
                 del(box_tracking.last_position[0])
-
-        def compute_xy(tracking_box):
-
-            for box_tracking in tracking_box:
-
-                xp = float((0.5 * (box_tracking.x2 - box_tracking.x1)) + box_tracking.x1)
-                yp = float(box_tracking.y2)
-
-                zone_result = []
-
-                x, y = None, None
-                for zone_detection in self.zone_detection[:-1]:
-                    if zone_detection.plot_in_image((xp, yp)):
-                        x, y = zone_detection.image_to_ground(xp, yp)
-                        box_tracking.x = int(x)
-                        box_tracking.y = int(y)
-                        break
-
-                if x is None:
-                    x, y = self.zone_detection[-1].image_to_ground(xp, yp)
-                    max_25 = int(0.25 * self.grid_max_value)
-                    max_75 = int(0.75 * self.grid_max_value)
-                    max_100 = self.grid_max_value
-
-                    if 0 < x < max_25 and 0 < y < max_100:
-                        x = -1
-
-                    elif max_75 < x < max_100 and 0 < y < max_100:
-                        y = max_100 + 1
-
-                    if 0 < y < max_25 and 0 < x < max_100:
-                        y = -1
-
-                    elif max_75 < y < max_100 and 0 < x < max_100:
-                        y = max_100 + 1
-
-                    box_tracking.x = int(x)
-                    box_tracking.y = int(y)
-
-        compute_xy(self.tracking_detection)
-        compute_xy(self.box_detection)
 
     def update_tracking_detection_occluded(self):
         """ Update occluded box tracking """
@@ -906,11 +773,11 @@ class CameraDetection:
         for tracking_detection in self.tracking_detection:
             tracking_detection.occluded_by_box = result[tracking_detection.tracking_id]
 
+
     def get_new_tracking_index(self):
         """ return next tracking index """
-        index = int(time.strftime("%H%M%S", time.localtime(time.time()))) * 10
         self.tracking_index += 1
-        return int(index + self.tracking_index)
+        return int(self.tracking_index)
 
     def compute_tracker(self):
         """ add tracking boottrack """
@@ -1015,10 +882,7 @@ class CameraDetection:
         box_detection_ok = []
 
         # --------- tracking update
-        self.update_xy_tracking()
         box_detection_tracking = []
-        print('--------self.box_detection---------', len(self.box_detection))
-        print('--------self.tracking_detection---------', len(self.tracking_detection))
 
         for box_detection in self.box_detection:
             tracking_ids = []
@@ -1039,8 +903,6 @@ class CameraDetection:
                 most_box_tracking.lost_frame = 0
                 most_box_tracking.tracking_ok += 1
                 most_box_tracking.update_by_boxdetection(box_detection)
-                box_detection.tracking_id = most_box_tracking.tracking_id
-                box_detection.state = 'ok'
                 box_detection_ok.append(box_detection)
 
         # --------- tracking lost
@@ -1050,28 +912,40 @@ class CameraDetection:
                 tracking_detection.lost_frame += 1
                 tracking_detection.tracking_ko += 1
 
+                # --------- Check new box_detection
+                score_proximity = {}
+                for box_detection in self.box_detection:
+                    # Check if some box_detection is corresponding
+                    if box_detection in box_detection_ok:
+                        continue
+                    elif box_detection.track_id or box_detection.track_byte_id or box_detection.track_boost_id:
+                        score = tracking_detection.intersection_boxdetection(box_detection)
+                        score_proximity[score] = box_detection
+
+                if False and score_proximity:
+                    score_max = max(list(score_proximity.keys()))
+                    if score_max >= self.tracking_seuil:
+                        tracking_detection.state = 'ok'
+                        if self.lost_frame_max < tracking_detection.lost_frame:
+                            self.lost_frame_max = tracking_detection.lost_frame
+                        tracking_detection.lost_frame = 0
+                        tracking_detection.update_by_boxdetection(box_detection)
+
+                        box_detection_ok.append(box_detection)
+
         # --------- tracking new
         for box_detection in self.box_detection:
             # Check if some lost tracking_detection is corresponding
             if box_detection in box_detection_ok:
                 continue
             elif box_detection.track_id:
-                if not(0 < box_detection.x < self.grid_max_value and 0 < box_detection.y < self.grid_max_value):
-                    max_10 = int(0.1 * self.grid_max_value)
-                    if - max_10 < box_detection.x < self.grid_max_value + max_10 and - max_10 < box_detection.y < self.grid_max_value + max_10:
-                        self.create_new_tracking_detection(box_detection)
-                        box_detection_ok.append(box_detection)
-                    continue
-
-                # Check if tracking lost to associate
-                tracking_detection_lost = self.get_tracking_lost_near_detection(box_detection)
-                if len(tracking_detection_lost) == 1:
-                    self.update_tracking_detection(tracking_detection_lost[0], box_detection)
-                    box_detection_ok.append(box_detection)
-                    continue
-
                 # New
-                self.create_new_tracking_detection(box_detection)
+                tracking_detection = TrackingDetection()
+                tracking_detection.tracking_id = self.get_new_tracking_index()
+                tracking_detection.state = 'new'
+                tracking_detection.tracker_fields = self.tracker_fields
+                tracking_detection.update_by_boxdetection(box_detection)
+                self.tracking_detection.append(tracking_detection)
 
         # Delete old box_detection
         for tracking_detection in self.tracking_detection:
@@ -1082,51 +956,16 @@ class CameraDetection:
         self.update_statistic()
 
         # Update XY
-        #self.update_tracking_detection_occluded()
+        self.update_tracking_detection_occluded()
         self.upadte_mean_h_w()
-
         for tracking_detection in self.tracking_detection:
             tracking_detection.predict_next_point()
             tracking_detection.validation_xy()
 
-    def update_tracking_detection(self, tracking_detection, box_detection):
-        """ Update tracking by box detection """
-        tracking_detection.state = 'ok'
-        tracking_detection.lost_frame = 0
-        tracking_detection.tracking_ok += 1
-        tracking_detection.update_by_boxdetection(box_detection)
-        box_detection.tracking_id = tracking_detection.tracking_id
-        box_detection.state = 'ok'
-
-    def create_new_tracking_detection(self, box_detection):
-        """ Create new tracking with box detection """
-        tracking_detection = TrackingDetection()
-        tracking_detection.last_position_max = self.last_position_max
-        tracking_detection.tracking_id = self.get_new_tracking_index()
-        tracking_detection.state = 'new'
-        tracking_detection.tracker_fields = self.tracker_fields
-        tracking_detection.update_by_boxdetection(box_detection)
-        self.tracking_detection.append(tracking_detection)
-        return tracking_detection
-
-    def get_tracking_lost_near_detection(self, box_detection):
-        """ return list of tracking box lost near detection """
-        result = []
-        for tracking_detection in self.tracking_detection:
-            if tracking_detection.state == "lost":
-                distance = box_detection.distance_tracking(tracking_detection)
-                if distance > self.lost_distance:
-                    continue
-                else:
-                    result.append(tracking_detection)
-        return result
+        self.update_xy_tracking()
 
     def update_statistic(self):
         """ update statistic of tracker """
-        stat_ok_count = 0
-        stat_last_count = 0
-        stat_new_count = 0
-
         for tracking_detection in self.tracking_detection:
             if tracking_detection.state == 'ok':
                 statistic_ok = self.stat_ok.copy()
@@ -1138,26 +977,19 @@ class CameraDetection:
                         statistic_lost[i] += 1
                 self.stat_ok = statistic_ok
                 self.stat_lost = statistic_lost
-                stat_ok_count += 1
 
-            elif tracking_detection.state == 'new':
+            if tracking_detection.state == 'new':
                 statistic_new = self.stat_new.copy()
                 for i, field_track in enumerate(self.tracker_fields):
                     if getattr(tracking_detection, field_track):
                         statistic_new[i] += 1
                 self.stat_new = statistic_new
-                stat_new_count += 1
 
-            elif tracking_detection.state == 'lost':
+            if tracking_detection.state == 'lost':
                 statistic_lost = self.stat_lost.copy()
                 for i, field_track in enumerate(self.tracker_fields):
                     statistic_lost[i] += 1
                 self.stat_lost = statistic_lost
-                stat_last_count += 1
-
-        self.stat_ok_count = stat_ok_count
-        self.stat_last_count = stat_last_count
-        self.stat_new_count = stat_new_count
 
     def send_tracking_datas(self):
         """ send tracking data """
@@ -1170,8 +1002,8 @@ class CameraDetection:
                 tracking_datas.append({
                     "tracking_id": int(tracking_detection.tracking_id),
                     "related_client_id": tracking_detection.related_client_id,
-                    "posX": int(tracking_detection.x_pred),
-                    "posY": int(tracking_detection.y_pred),
+                    "posX": int(100.0 * tracking_detection.x),
+                    "posY": int(100.0 * tracking_detection.y),
                     "state": tracking_detection.state,
                     "lost_frame": tracking_detection.lost_frame,
                     "zone": "game",
@@ -1189,113 +1021,60 @@ class CameraDetection:
         except Exception as e:
             print("❌ Erreur lors de l'envoi :", e)
 
-    def get_out_filename(self):
-        """
-        :return: new filename
-        """
-        # Récupère le dossier Vidéos de l'utilisateur
-        home = os.path.expanduser("~")
-        videos_dir = os.path.join(home, "Vidéos")
 
-        # Génère un nom de fichier basé sur la date et l'heure
-        date_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"out_{date_str}.mp4"
+    def send_tracking_datas_test(self, test_id, state):
+        """ send tracking data """
+        tracking_fps = self.time_mean and float(1.0 / (sum(self.time_mean) / len(self.time_mean))) or 0.0
 
-        # Construit le chemin complet
-        file_path = os.path.join(videos_dir, filename)
-        return file_path
+        tracking_datas = []
+
+        tracking_id = 1
+        for x in [0, 50, 100]:
+            for y in [0, 50, 100]:
+
+                tracking_datas.append({
+                    "tracking_id": f'{test_id}-{x}-{y}',
+                    "related_client_id": None,
+                    "posX": int(x),
+                    "posY": int(y),
+                    "state": state,
+                    "lost_frame": 0,
+                    "zone": "game",
+                    })
+
+                tracking_id += 1
+        data = {
+            'tracking_fps': tracking_fps,
+            'tracking_datas': tracking_datas,
+            }
+
+        try:
+            print('-------data---------', data)
+            t = threading.Thread(target=httpx.post(self.sending_url, json=data, timeout=1.0), args=(self.sending_url, data))
+            t.start()
+            # response = httpx.post(self.sending_url, json=data, timeout=1.0)
+        except Exception as e:
+            print("❌ Erreur lors de l'envoi :", e)
 
     def main(self):
         """ launch captation """
-        parser = argparse.ArgumentParser(description="Client HTTP en threading")
-        parser.add_argument("--in_video", required=False, help="Path of the video training")
-        parser.add_argument("--show", required=False, help="View camera screen")
-        parser.add_argument("--output", required=False, help="Save video")
-        parser.add_argument("--step", required=False, help="Step by step")
-        parser.add_argument("--camera_usb_number", required=False, help="/dev/video usb number")
 
-        args = parser.parse_args()
+        test_id = 'test00'
 
-        if args.camera_usb_number:
-            self.camera_usb_number = int(args.camera_usb_number)
+        self.send_tracking_datas_test(test_id, 'new')
 
-        if args.in_video:
-            self.init_video(args.video)
-        else:
-            self.init_camera()
-
-        self.init_model()
-        self.load_from_json()
-
-        out = None
-        if args.output:
-            # Définir le codec et créer l'objet VideoWriter
-            fourcc = cv2.VideoWriter_fourcc(*'XVID')
-            out_filename = self.get_out_filename()
-            out = cv2.VideoWriter(out_filename, fourcc, 5.0, (self.camera_width, self.camera_height))
-
-        sleep_key = False
 
         while True:
-            start_time = time.time()
-            # Capture une frame
-            self.track_fps()
-
-            self.get_camera_frame()
-            camera_time = time.time()
-
-            self.get_yolo_tracking()
-            yolo_time = time.time()
-
-            self.compute_tracking2()
-            detect_time = time.time()
-
-            if out is not None:
-                out.write(self.camera_frame)
-
-            if args.show:
-                # Print information
-                print('------camera_time------', camera_time - start_time)
-                print('------yolo_time------', yolo_time - camera_time)
-                print('------detect_time------', detect_time - yolo_time)
-
-                # Dessiner les boîtes sur l'image originale
-                frame = self.camera_frame
-                frame = self.show_grid(frame)
-                frame = self.show_tracking(frame)
+            time.sleep(0.5)
+            self.send_tracking_datas_test(test_id, 'ok')
 
 
-                if frame is not None:
-                    cv2.imshow("Camera USB", frame)
 
-            # Envoie les données
-            self.send_tracking_datas()
 
-            #out.write(frame)
 
-            # Quitter avec la touche 'q'
-            key = cv2.waitKey(1) & 0xFF
-            if key == ord('q'):
-                self.save_to_json()
-                break
-            elif key == ord('a'):
-                sleep_key = True
-            elif key:
-                self.key_press(key)
 
-            if args.step == '2' and self.stat_new_count > 0:
-                while key != ord('a'):
-                    key = cv2.waitKey(1) & 0xFF
 
-            while args.step == '1' and key != ord('a'):
-                key = cv2.waitKey(1) & 0xFF
 
-        # Libère les ressources
-        if out is not None:
-            out.release()
-        self.stop_camera()
-        if args.show:
-            cv2.destroyAllWindows()
 
 
 if __name__ == "__main__":
