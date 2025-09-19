@@ -16,7 +16,8 @@ import threading
 import argparse
 from collections import Counter
 import math
-
+import os
+from datetime import datetime
 
 red_color = (0, 0, 255)
 green_color = (0, 255, 0)
@@ -379,6 +380,21 @@ class CameraDetection:
         self.running = False
         self.thread = None
 
+    def get_out_filename(self):
+        """ 
+        :return: new filename 
+        """
+        # Récupère le dossier Vidéos de l'utilisateur
+        home = os.path.expanduser("~")
+        videos_dir = os.path.join(home, "Vidéos")
+
+        # Génère un nom de fichier basé sur la date et l'heure
+        date_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"out_{date_str}.mp4"
+
+        # Construit le chemin complet
+        file_path = os.path.join(videos_dir, filename)
+        return file_path
 
 
     def init_grid(self):
