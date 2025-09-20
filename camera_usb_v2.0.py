@@ -345,7 +345,7 @@ class CameraDetection:
         self.grid = []
         self.grid_pt_selected = (0, 0)
 
-        self.yolo_model_name = "yolo12x.pt"
+        self.yolo_model_name = "yolo12n.pt"
         self.yolo_conf = 0.05 # seuil de confiance
         self.yolo_filter_class = [0] # 0: personne, list of class to track
         self.yolo_model = None
@@ -353,7 +353,7 @@ class CameraDetection:
         self.boosttrack = None
         self.bytetrack = None
         self.ocsort = None
-        self.tracker_fields = ['track_id', 'track_boost_id', 'track_byte_id', 'track_ocsort_id']
+        self.tracker_fields = ['track_id'] #, 'track_boost_id', 'track_byte_id', 'track_ocsort_id']
         self.zone_detection = []
         self.box_detection = []
         self.tracking_detection = []
@@ -502,7 +502,7 @@ class CameraDetection:
             self.detect_camera()
 
         self.camera = cv2.VideoCapture(self.camera_usb_number)
-        # (640, 480), (1280, 800), (1920, 1080), (2560, 1440),
+        # (640, 480), 960x720, (1280, 800), (1920, 1080), (2560, 1440),
 
         resolutions = [(640, 480), (800, 600), (1280, 720), (1280, 800)]
         for (w, h) in resolutions:
@@ -1010,7 +1010,7 @@ class CameraDetection:
     def compute_tracking2(self):
         """ compute new tracking with box_detection """
 
-        self.compute_tracker()
+        #self.compute_tracker()
         self.tracking_detection_save()
 
         history_track = self.get_history_track()

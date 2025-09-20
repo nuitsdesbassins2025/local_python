@@ -119,6 +119,10 @@ class TrackingDetection:
     def predict_next_point(self):
         """ estimation of next point """
 
+        if self.state == 'lost':
+            self.x_pred = self.x
+            self.y_pred = self.y
+
         if len(self.last_position) >= self.last_position_max:
             points = self.last_position
             vx = []
@@ -137,17 +141,9 @@ class TrackingDetection:
             avg_vx2 = sum(vx) / 3
             avg_vy2 = sum(vy) / 3
 
-            if self.state == 'lost':
-                avg_vx2 = int(avg_vx2 / self.lost_frame)
-                avg_vy2 = int(avg_vy2 / self.lost_frame)
-
             # Prédiction du prochain point
             self.x_pred = self.x + avg_vx2
             self.y_pred = self.y + avg_vy2
-
-            if self.state == 'lost':
-                self.x = self.x_pred
-                self.y = self.y_pred
 
         else:
             self.x_pred = self.x
@@ -357,9 +353,10 @@ class CameraDetection:
         self.zone_detection = []
         self.box_detection = []
         self.tracking_detection = []
-        self.tracking_seuil = 0.5 # surface minimum to link a lost box detection
+        self.tracking_seuil = 0.25 # surface minimum to link a lost box detection
         self.lost_frame_max = 60
-        self.lost_distance = 0.25 * self.grid_max_value
+
+        self.lost_distance = 0.5 * self.grid_max_value
         self.tracking_index = 0
         self.last_position_max = 5
         self.sending_url = 'http://localhost:8000/camera/detection'
@@ -504,9 +501,9 @@ class CameraDetection:
             self.detect_camera()
 
         self.camera = cv2.VideoCapture(self.camera_usb_number)
-        # (640, 480), (1280, 800), (1920, 1080), (2560, 1440),
+        # (640, 480), 960x720 (1280, 800), (1920, 1080), (2560, 1440), (960, 720), (800, 600), (960, 720),
 
-        resolutions = [(640, 480), (800, 600), (1280, 720), (1280, 800)]
+        resolutions = [(800, 600), (960, 720), (960, 540), (640, 480), (1280, 720)]
         for (w, h) in resolutions:
             self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, w)
             self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, h)
@@ -702,7 +699,7 @@ class CameraDetection:
                                             tracker="custom_tracker.yaml",
                                             classes=self.yolo_filter_class,
                                             conf=self.yolo_conf,
-                                            #imgsz=1280,
+                                            imgsz=self.camera_width,
                                             persist=True)
             detections = results[0].boxes.xyxy  # Coordonnées [x1, y1, x2, y2]
             classes = results[0].boxes.cls  # Indices des classes détectées
@@ -775,7 +772,18 @@ class CameraDetection:
             y = int(1.5 * bd.y_pred / 10)
             cv2.circle(frame, (x, y), 6, (255, 255, 255), 1)
 
-        # Show prediction position
+            # show historique position
+            pt0 = None
+            for pt in bd.last_position:
+                x = int(1.5 * pt[0] / 10 + self.camera_width - 150)
+                y = int(1.5 * pt[1] / 10)
+                pt1 = (x, y)
+                if pt0 is not None:
+                    cv2.line(frame, pt1, pt0, color, thickness=1)
+                pt0 = pt1
+
+
+        # Show prediction grid
         cv2.rectangle(frame, (self.camera_width - 150, 0),
                       (self.camera_width, 150), (255, 255, 255), 2)
 
@@ -1015,40 +1023,27 @@ class CameraDetection:
         # self.compute_tracker()
         self.tracking_detection_save()
 
-        history_track = self.get_history_track()
-        update_tracking_detection = []
+        detection_track_ids = []
         box_detection_ok = []
 
         # --------- tracking update
         self.update_xy_tracking()
-        box_detection_tracking = []
 
         for box_detection in self.box_detection:
-            tracking_ids = []
-            for field_track in self.tracker_fields:
-                tracker_id = getattr(box_detection, field_track, 0)
-                if tracker_id in list(history_track[field_track].keys()):
-                    tracking_ids.append(history_track[field_track][tracker_id])
+            for most_box_tracking in self.tracking_detection:
+                if box_detection.track_id in detection_track_ids:
+                    continue
+                if box_detection.track_id in most_box_tracking.track_ids:
+                    detection_track_ids.append(box_detection.track_id)
 
-            counter = Counter(tracking_ids)
-            if counter:
-                most_box_tracking, count = counter.most_common(1)[0]
-                for field_track in self.tracker_fields:
-                    tracker_id = getattr(box_detection, field_track, 0)
-                    if tracker_id in list(history_track[field_track].keys()) and history_track[field_track][tracker_id] != most_box_tracking:
-                        setattr(box_detection, field_track, 0)
+                    most_box_tracking.state = 'ok'
+                    most_box_tracking.lost_frame = 0
+                    most_box_tracking.tracking_ok += 1
+                    most_box_tracking.update_by_boxdetection(box_detection)
 
-                most_box_tracking.state = 'ok'
-                
-                if most_box_tracking.lost_frame > self.lost_frame_max:
-                    self.lost_frame_max = most_box_tracking.lost_frame
-                most_box_tracking.lost_frame = 0
-
-                most_box_tracking.tracking_ok += 1
-                most_box_tracking.update_by_boxdetection(box_detection)
-                box_detection.tracking_id = most_box_tracking.tracking_id
-                box_detection.state = 'ok'
-                box_detection_ok.append(box_detection)
+                    box_detection.tracking_id = most_box_tracking.tracking_id
+                    box_detection.state = 'ok'
+                    box_detection_ok.append(box_detection)
 
         # --------- tracking lost
         for tracking_detection in self.tracking_detection:
@@ -1056,6 +1051,32 @@ class CameraDetection:
                 tracking_detection.state = 'lost'
                 tracking_detection.lost_frame += 1
                 tracking_detection.tracking_ko += 1
+
+                if tracking_detection.track_id in detection_track_ids:
+                    tracking_detection.track_id = 0
+                for track_id in detection_track_ids:
+                    if track_id in tracking_detection.track_ids:
+                        del(tracking_detection.track_ids[track_id])
+
+        # --------- tracking void
+        for box_detection in self.box_detection:
+            # Check if some lost tracking_detection is corresponding
+            if box_detection in box_detection_ok:
+                continue
+
+            elif box_detection.track_id in detection_track_ids:
+                box_detection.track_id = 0
+
+        for box_detection in self.box_detection:
+            # Check if some lost tracking_detection is corresponding
+            if box_detection in box_detection_ok:
+                continue
+            elif not box_detection.track_id:
+                # Check if tracking lost to associate
+                tracking_detection_lost = self.get_tracking_lost_near_detection(box_detection)
+                if tracking_detection_lost is not None:
+                    self.update_tracking_detection(tracking_detection_lost, box_detection)
+                    box_detection_ok.append(box_detection)
 
         # --------- tracking new
         for box_detection in self.box_detection:
@@ -1079,16 +1100,7 @@ class CameraDetection:
                     # New
                     self.create_new_tracking_detection(box_detection)
 
-        # --------- tracking void
-        for box_detection in self.box_detection:
-            # Check if some lost tracking_detection is corresponding
-            if box_detection in box_detection_ok:
-                continue
-            elif not box_detection.track_id:
-                # Check if tracking lost to associate
-                tracking_detection_lost = self.get_tracking_lost_near_detection(box_detection)
-                if tracking_detection_lost is not None:
-                    box_detection_ok.append(box_detection)
+
 
         # -------- Delete old box_detection
         for tracking_detection in self.tracking_detection:
@@ -1281,10 +1293,6 @@ class CameraDetection:
                 out.write(self.camera_frame)
 
             if args.show:
-                # Print information
-                print('------camera_time------', camera_time - start_time)
-                print('------yolo_time------', yolo_time - camera_time)
-                print('------detect_time------', detect_time - yolo_time)
 
                 # Dessiner les boîtes sur l'image originale
                 frame = self.camera_frame
