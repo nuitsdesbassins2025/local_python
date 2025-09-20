@@ -356,7 +356,7 @@ class CameraDetection:
         self.tracking_seuil = 0.25 # surface minimum to link a lost box detection
         self.lost_frame_max = 60
 
-        self.lost_distance = 0.5 * self.grid_max_value
+        self.lost_distance = 0.25 * self.grid_max_value
         self.tracking_index = 0
         self.last_position_max = 5
         self.sending_url = 'http://localhost:8000/camera/detection'
